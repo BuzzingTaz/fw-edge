@@ -84,7 +84,7 @@ func (client *Client) EstablishPC() error {
 				// Print size of received packet
 				slog.Info("Received RTP packet", "size", rtpPacket.MarshalSize())
 
-				slog.Info("RtpPacket Payload:", "payload", rtpPacket.Payload)
+				// slog.Info("RtpPacket Payload:", "payload", rtpPacket.Payload)
 			}
 		}()
 	})

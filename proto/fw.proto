@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+option go_package = "github.com/BuzzingTaz/fw-edge-apps/proto";
+
+package fwproto;
+
+service ComputeStream {
+
+  // Basic implementation for one frame at a time
+  // Recommended to use streams for larger images
+  rpc OffloadImage(DecodedFrame) returns (InferenceResult);
+
+  // The client (WebRTC receiver) streams RTP packets to the server
+  rpc StreamVideo(stream RTPPacket) returns (stream InferenceResult);
+
+  // Alternate path to stream decoded video directly
+  rpc StreamDecodedVideo(stream DecodedFrame) returns (stream InferenceResult);
+}
+
+message DecodedFrame {
+  uint64 timestamp = 1;
+  bytes frame_data = 2;
+}
+
+message InferenceResult {
+  uint64 timestamp = 1;
+  uint64 processing_status = 2;
+  repeated BoundingBox detections = 3;
+}
+
+message BoundingBox {
+  uint64 x = 1;
+  uint64 y = 2;
+  uint64 dx = 3;
+  uint64 dy = 5;
+  string label = 6;
+  float confidence = 7;
+}
+
+
+// Figure out if not having all fields here is fine
+message RTPPacket {
+// The raw, serialized bytes of the RTP packet
+  bytes data = 1;
+
+  // Optional metadata for easy routing/logging on the server side
+  string track_id = 2;
+  uint32 ssrc = 3;
+}
+
+message StreamSummary {
+  int32 packets_received = 1;
+  string message = 2;
+}
+
