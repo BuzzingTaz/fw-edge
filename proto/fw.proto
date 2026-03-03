@@ -10,7 +10,7 @@ service ComputeStream {
   // Recommended to use streams for larger images
   rpc OffloadImage(DecodedFrame) returns (InferenceResult);
 
-  // The client (WebRTC receiver) streams RTP packets to the server
+  // The client streams RTP packets to the server, receives a stream of corresponding inference results
   rpc StreamVideo(stream RTPPacket) returns (stream InferenceResult);
 
   // Alternate path to stream decoded video directly
@@ -38,9 +38,8 @@ message BoundingBox {
 }
 
 
-// Figure out if not having all fields here is fine
 message RTPPacket {
-// The raw, serialized bytes of the RTP packet
+  // The raw, serialized bytes of the RTP packet
   bytes data = 1;
 
   // Optional metadata for easy routing/logging on the server side

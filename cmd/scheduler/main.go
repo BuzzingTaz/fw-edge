@@ -33,9 +33,11 @@ const httpServerPort = 9998
 var computeAddr = flag.String("compute-addr", "localhost:9997", "the address to connect to")
 var computeStreamClient pb.ComputeStreamClient
 
+var tempConn *websocket.Conn
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
+	var err error
 	fmt.Println("WebSocket handler called")
 
 	userID := r.PathValue("userID")
@@ -45,13 +47,13 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	tempConn, err = upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		fmt.Println("WebSocket upgrade failed:", err)
 		return
 	}
 	// defer conn.Close()
-	fmt.Println("WebSocket connection established for user:", userID)
+	log.Println("WebSocket connection established for user:", userID)
 
 	// go SendFrameData(...)
 	go func() {
@@ -69,14 +71,13 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		go ReadInferenceData(computeVideoStreamer)
 
 		for {
-			err = conn.ReadJSON(&message)
+			err = tempConn.ReadJSON(&message)
 			if err != nil {
 				fmt.Println("WebSocket read error:", err)
 				break
 			}
 
-			// Handle the message (e.g., WebRTC signaling)
-			fmt.Print("Received message at:", message.Timestamp)
+			fmt.Println("Received message at:", message.Timestamp)
 			fmt.Println("Data length:", len(message.Payload))
 			fmt.Println(" from user:", userID)
 
@@ -113,6 +114,18 @@ func ReadInferenceData(stream grpc.BidiStreamingClient[pb.RTPPacket, pb.Inferenc
 		// Process your inference data here!
 		log.Printf("Received inference for frame %d: %d (%d detections)",
 			inferenceData.Timestamp, inferenceData.ProcessingStatus, len(inferenceData.Detections))
+
+		if tempConn != nil {
+			err = tempConn.WriteJSON(inferenceData)
+			if err != nil {
+				log.Printf("Error sending inference data to client: %v", err)
+				return
+			}
+			log.Println("Sent inference data back to client for frame", inferenceData.Timestamp)
+		} else {
+			log.Println("No WebSocket connection to send inference data to client.")
+		}
+
 	}
 }
 

@@ -28,13 +28,28 @@ type ClientWsMessage struct {
 	Signal *WebRTCSignal `json:"webrtc_signal,omitempty"`
 }
 
+// temporary
+// TODO: ew, change this to grpc protobuf (that's the whole point of grpc, right?)
+type ProcessedDataMessage struct {
+	Timestamp        uint64 `json:"timestamp"`
+	ProcessingStatus int    `json:"processing_status"`
+	Detections       []struct {
+		X          int     `json:"x"`
+		Y          int     `json:"y"`
+		Dx         int     `json:"dx"`
+		Dy         int     `json:"dy"`
+		Label      string  `json:"label"`
+		Confidence float64 `json:"confidence"`
+	} `json:"detections"`
+}
+
 func (client *Client) WriteSignalJSON(v ClientWsMessage) error {
 	client.Mutex.Lock()
 	defer client.Mutex.Unlock()
 	return client.ClientConn.WriteJSON(v)
 }
 
-func (client *Client) EstablishPC() error {
+func (client *Client) InitiatePC() error {
 	var err error
 
 	config := webrtc.Configuration{
@@ -130,12 +145,60 @@ func (client *Client) EstablishPC() error {
 
 }
 
+func (client *Client) SetupWebRTCSignalHandler() {
+	var message ClientWsMessage
+	for {
+		err := client.ClientConn.ReadJSON(&message)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				slog.Error("WS closed unexpectedly: ", err)
+			}
+			break
+		}
+
+		if message.Signal != nil {
+			slog.Info("Received WebRTC signal", "type", message.Signal.Type)
+			messageSignal := message.Signal
+
+			switch messageSignal.Type {
+			case "answer":
+				slog.Info("Received answer from client", "userID", client.UserID)
+				answer := webrtc.SessionDescription{
+					Type: webrtc.SDPTypeAnswer,
+					SDP:  messageSignal.SDP,
+				}
+				if err = client.PeerConnection.SetRemoteDescription(answer); err != nil {
+					slog.Error("SetRemoteDescription failed", "error", err)
+				} else {
+					slog.Info("Set remote description with answer", "userID", client.UserID)
+				}
+			case "candidate":
+				slog.Info("Received ICE candidate from client", "userID", client.UserID)
+				if messageSignal.ICE != nil {
+					if err = client.PeerConnection.AddICECandidate(*messageSignal.ICE); err != nil {
+						slog.Error("AddICECandidate failed", "error", err)
+					} else {
+						slog.Info("Added ICE candidate", "userID", client.UserID)
+					}
+				} else {
+					slog.Error("Received nil ICE candidate", "userID", client.UserID)
+				}
+			default:
+				slog.Warn("Unknown message type", "type", messageSignal.Type)
+			}
+		}
+
+	}
+}
+
 func (client *Client) ConnectScheduler() error {
-	schedulerConn, _, err := websocket.DefaultDialer.Dial("ws://localhost:9999/ws/"+client.UserID, nil)
+	schedulerConn, _, err := websocket.DefaultDialer.Dial("ws://localhost:9998/ws/"+client.UserID, nil)
 	if err != nil {
 		return err
 	}
+	client.Mutex.Lock()
 	client.SchedulerConn = schedulerConn
+	client.Mutex.Unlock()
 	slog.Info("Connected to scheduler WebSocket", "userID", client.UserID)
 	return nil
 }
