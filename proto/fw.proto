@@ -52,3 +52,11 @@ message StreamSummary {
   string message = 2;
 }
 
+message MetricEvent {
+  string task_id = 1;
+  string service_name = 2;
+  uint64 timestamp = 3;
+  string event_type = 4;
+  map <string, string> data = 5;
+}
+

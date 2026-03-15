@@ -93,7 +93,7 @@ func (client *Client) InitiatePC() error {
 					slog.Error("Failed to read RTP packet", "error", readErr)
 				}
 
-				slog.Info("Read RTP packet:", rtpPacket)
+				// slog.Info("Read RTP packet:", rtpPacket)
 				client.SchedulerConn.WriteJSON(rtpPacket)
 
 				// Print size of received packet

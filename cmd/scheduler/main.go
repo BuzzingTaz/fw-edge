@@ -112,7 +112,7 @@ func ReadInferenceData(stream grpc.BidiStreamingClient[pb.RTPPacket, pb.Inferenc
 		}
 
 		// Process your inference data here!
-		log.Printf("Received inference for frame %d: %d (%d detections)",
+		log.Printf("Received processed data for frame timestamp  %d: %d (%d detections)",
 			inferenceData.Timestamp, inferenceData.ProcessingStatus, len(inferenceData.Detections))
 
 		if tempConn != nil {
@@ -170,10 +170,9 @@ func main() {
 	fmt.Println(frameScheduler)
 	// go frameScheduler.Run()
 
-	// wait
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM) // Wait for SIGINT or SIGTERM signals
-	<-stop                                               // Block until a signal is received
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
 
 	fmt.Println("\nShutdown signal received. Exiting.")
 }

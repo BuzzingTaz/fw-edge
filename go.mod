@@ -3,7 +3,9 @@ module github.com/BuzzingTaz/fw-edge-apps
 go 1.25.4
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/nats-io/nats.go v1.49.0
 	github.com/pion/rtp v1.8.23
 	github.com/pion/webrtc/v4 v4.1.6
 	google.golang.org/grpc v1.79.1
@@ -11,7 +13,9 @@ require (
 )
 
 require (
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/nats-io/nkeys v0.4.12 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v3 v3.0.7 // indirect
 	github.com/pion/ice/v4 v4.0.10 // indirect
