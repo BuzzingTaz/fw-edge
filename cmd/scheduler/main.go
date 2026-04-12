@@ -59,7 +59,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		var message rtp.Packet
 
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 		defer cancel()
 		// NOTE: Only creating rtp streaming for now, change to decoded frames
 		computeVideoStreamer, err := computeStreamClient.StreamVideo(ctx)

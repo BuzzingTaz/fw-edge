@@ -3,8 +3,10 @@ package clientif
 import (
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -85,12 +87,29 @@ func (client *Client) InitiatePC() error {
 	client.PeerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		slog.Info("Track received", "kind", track.Kind().String(), "id", track.ID())
 
+		// Ticker to send PLIs every 2 seconds to request keyframes from the client
+		go func() {
+			ticker := time.NewTicker(time.Second * 2)
+			defer ticker.Stop()
+			for range ticker.C {
+				err := client.PeerConnection.WriteRTCP([]rtcp.Packet{
+					&rtcp.PictureLossIndication{
+						MediaSSRC: uint32(track.SSRC()),
+					},
+				})
+				if err != nil {
+					// If the connection closes, exit the loop
+					return
+				}
+			}
+		}()
 		// Actual processing and streaming happens on a separate goroutine
 		go func() {
 			for {
 				rtpPacket, _, readErr := track.ReadRTP()
 				if readErr != nil {
 					slog.Error("Failed to read RTP packet", "error", readErr)
+					break
 				}
 
 				// slog.Info("Read RTP packet:", rtpPacket)
@@ -99,7 +118,7 @@ func (client *Client) InitiatePC() error {
 				// Print size of received packet
 				slog.Info("Received RTP packet", "size", rtpPacket.MarshalSize())
 
-				// slog.Info("RtpPacket Payload:", "payload", rtpPacket.Payload)
+				slog.Info("RtpPacket Payload Header:", "Header", rtpPacket.Header)
 			}
 		}()
 	})
