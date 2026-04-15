@@ -1,6 +1,6 @@
 /*
 This program is a Go server that receives a video stream (as RTP packets) from one client,
-forwards it via UDP, and also receives AI inference results (bounding boxes) from a Python process. 
+forwards it via UDP, and also receives AI inference results (bounding boxes) from a Python process.
 Let me break it down section by section.
 */
 
@@ -12,9 +12,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 
-	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	pbcompute "github.com/BuzzingTaz/fw-edge-apps/cmd/compute/edge-compute-yolo"
+	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/pion/rtp"
 	"google.golang.org/grpc"
 )
@@ -133,7 +134,7 @@ func (*computeStreamServer) StreamVideo(stream grpc.BidiStreamingServer[pb.RTPPa
 		// get the actual results:
 		mu.RLock()
 		boxesToSend := latestBoxes
-		mu.RUnlock()
+		
 
 		var detections []*pbcompute.BoundingBox
 		for _,box := range boxesToSend {
@@ -146,6 +147,7 @@ func (*computeStreamServer) StreamVideo(stream grpc.BidiStreamingServer[pb.RTPPa
 				Confidence: 	box.Confidence,
 			})
 		}
+		mu.RUnlock()
 
 		log.Printf("Sending %d detections back to client for frame timestamp %d\n", len(detections), packet.Timestamp)
 //--------------------------------------------------------------------------------
