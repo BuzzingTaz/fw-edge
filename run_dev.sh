@@ -2,8 +2,9 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-JETSON="nvidia1@192.168.1.201"
-REMOTE_DIR="~/fw-edge"
+JETSON="nvidia3@10.42.0.81"
+REMOTE_DIR="/home/nvidia3/Documents/fw-edge-wip/
+"
 
 echo "Syncing..."
 rsync -avz \

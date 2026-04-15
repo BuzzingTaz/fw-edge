@@ -1,6 +1,7 @@
 syntax = "proto3";
 
-option go_package = "github.com/BuzzingTaz/fw-edge-apps/proto";
+option go_package = "github.com/BuzzingTaz/fw-edge-apps/cmd/compute/edge-compute-yolo;pbcompute";
+
 
 service InferenceTracker {
   rpc StreamResults (stream InferenceResult) returns (Ack) {}
