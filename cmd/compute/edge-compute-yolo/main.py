@@ -30,9 +30,9 @@ def generate_inference_stream(cap, model):
             frame_count += 1
             if frame_count == 10:
                 cv2.imwrite("/app/debug_frame.jpg", frame)
-                print("\/app/debug_frame.jpg!\n")
+                print("/app/debug_frame.jpg!\n")
             # Run inference (stream=True prevents memory leaks)
-            results = model(frame, stream=True, conf=0.1, verbose=False)
+            results = model(frame, stream=True, conf=0.5, verbose=False)
 
             timestamp_ms = int(time.time() * 1000)
 

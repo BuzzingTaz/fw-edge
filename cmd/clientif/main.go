@@ -70,6 +70,9 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			})
 
 			slog.Info("Received processed data from scheduler", "userID", userID, "Frame Timestamp", message.Timestamp)
+			if err = client.SendDataToPeer(message); err != nil {
+				slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
+			}
 		}
 	}()
 
