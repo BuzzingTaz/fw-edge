@@ -1,9 +1,14 @@
 package clientif
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,6 +19,7 @@ import (
 // Client represents a connected user
 type Client struct {
 	UserID         string
+	Protocol       string
 	ClientConn     *websocket.Conn
 	SchedulerConn  *websocket.Conn
 	PeerConnection *webrtc.PeerConnection
@@ -55,6 +61,10 @@ func (client *Client) WriteSignalJSON(v ClientWsMessage) error {
 
 func (client *Client) InitiatePC() error {
 	var err error
+	if client.Protocol != "webrtc" {
+		slog.Error("InitiatePC called with unsupported protocol", "protocol", client.Protocol)
+		return errors.New("Unsupported protocol: " + client.Protocol)
+	}
 
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -168,7 +178,7 @@ func (client *Client) InitiatePC() error {
 
 }
 
-func (client *Client) SetupWebRTCSignalHandler() {
+func (client *Client) ListenWebRTCSignalHandler() {
 	var message ClientWsMessage
 	for {
 		err := client.ClientConn.ReadJSON(&message)
@@ -226,13 +236,19 @@ func (client *Client) ConnectScheduler() error {
 	return nil
 }
 
-func (client *Client) SendDataToPeer(message ProcessedDataMessage) error {
-	if client.PeerConnection == nil || client.DataChannel == nil {
-		return nil
+// SendDataToPeer sends a generic message to the client via the WebRTC data channel
+func SendDataToPeer[T any](client *Client, message T) error {
+	if client.Protocol != "webrtc" {
+		return errors.New("Unsupported protocol: " + client.Protocol)
 	}
-
+	if client.PeerConnection == nil {
+		return errors.New("PeerConnection not established")
+	}
+	if client.DataChannel == nil {
+		return errors.New("DataChannel not established")
+	}
 	if client.DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
-		return nil
+		return errors.New("DataChannel not open")
 	}
 
 	jsonData, err := json.Marshal(message)
@@ -242,3 +258,26 @@ func (client *Client) SendDataToPeer(message ProcessedDataMessage) error {
 
 	return client.DataChannel.SendText(string(jsonData))
 }
+
+func ListenScheduler[T any](client *Client, callback func(*Client, T)) {
+	var message T
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		err := client.SchedulerConn.ReadJSON(&message)
+		if err != nil {
+			slog.Error("Failed to read from scheduler", "error", err)
+			break
+		}
+
+		callback(client, message)
+	}
+}
+

@@ -16,74 +16,74 @@ import (
 	"github.com/BuzzingTaz/fw-edge-apps/internal/metrics"
 )
 
-// WebRTC signalling message over WebSocket
-
 var clientsManager *clientif.ClientsManager
-var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 var natsURL = "localhost:4222"
 
-func wsHandler(w http.ResponseWriter, r *http.Request) {
-	// Upgrade HTTP to WebSocket
-	userID := r.PathValue("userID")
+func initiateHandler(w http.ResponseWriter, r *http.Request) {
+	protocol := r.PathValue("protocol")
+	if !clientif.IsValidProtocol(protocol) {
+		http.Error(w, "Invalid protocol", http.StatusBadRequest)
+		return
+	}
 
-	// TODO: Improve validation
+	userID := r.PathValue("userID")
 	if userID == "" {
+		// TODO: Improve validation
 		http.Error(w, "userID is required", http.StatusBadRequest)
 		return
 	}
 
-	client := clientsManager.CreateClient(userID)
-
-	clientConn, err := upgrader.Upgrade(w, r, nil)
+	client, err := clientsManager.CreateClient(userID, protocol)
 	if err != nil {
-		slog.Error("WebSocket upgrade failed", "error", err)
+		slog.Error("Failed to create client ", err)
+		http.Error(w, "Failed to create client: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	client.ClientConn = clientConn
-	slog.Info("WebSocket connection established for ", "userID", userID)
 
-	if err = client.ConnectScheduler(); err != nil {
+	err = client.ConnectScheduler()
+	if err != nil {
 		slog.Error("Failed to connect to scheduler ", err)
+		http.Error(w, "Failed to connect to scheduler: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	go func() {
-		var message clientif.ProcessedDataMessage
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+	if protocol == "webrtc" {
+		slog.Info("Initiating WebRTC connection for ", "userID", userID)
 
-			err = client.SchedulerConn.ReadJSON(&message)
-			if err != nil {
-				slog.Error("Failed to read from scheduler", "error", err)
-				break
-			}
-			enrichedCtx := metrics.WithTaskID(ctx, "test_task")
-
-			metrics.TrackMetric(enrichedCtx, "clientif_received_scheduler", map[string]string{
-				"time": strconv.FormatUint(message.Timestamp, 10),
-			})
-
-			slog.Info("Received processed data from scheduler", "userID", userID, "Frame Timestamp", message.Timestamp)
-			if err = client.SendDataToPeer(message); err != nil {
-				slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
-			}
+		var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		clientConn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			slog.Error("WebSocket upgrade failed", "error", err)
+			return
 		}
-	}()
+		client.ClientConn = clientConn
+		slog.Info("Signalling WebSocket connection established for ", "userID", userID)
 
-	go client.SetupWebRTCSignalHandler()
+		go client.ListenWebRTCSignalHandler()
 
-	if err = client.InitiatePC(); err != nil {
-		slog.Error("Failed to establish PeerConnection", "error", err)
-		return
+		go clientif.ListenScheduler(client, SchedulerCallback) // Go doesn't have generics for methods
+
+		if err := client.InitiatePC(); err != nil {
+			slog.Error("Failed to establish PeerConnection", "error", err)
+			return
+		}
 	}
 }
 
+func SchedulerCallback(client *clientif.Client, message clientif.ProcessedDataMessage) {
+	ctx := context.Background()
+
+	enrichedCtx := metrics.WithTaskID(ctx, "test_task")
+
+	metrics.TrackMetric(enrichedCtx, "clientif_received_scheduler", map[string]string{
+		"time": strconv.FormatUint(message.Timestamp, 10),
+	})
+
+	slog.Info("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
+	if err := clientif.SendDataToPeer(client, message); err != nil {
+		slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
+	}
+}
 func init() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
@@ -98,7 +98,7 @@ func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
 	}
 	defer metrics.CloseMetrics()
 
-	http.HandleFunc("/ws/{userID}", wsHandler)
+	http.HandleFunc("/initiate/{protocol}/{userID}", initiateHandler)
 	go func() {
 		slog.Info("Starting server on :9999")
 		if err := http.ListenAndServe(":9999", nil); err != nil {
@@ -106,7 +106,6 @@ func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
 		}
 	}()
 
-	// wait
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop

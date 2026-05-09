@@ -1,8 +1,9 @@
 package clientif
 
 import (
-	"sync"
+	"errors"
 	"log/slog"
+	"sync"
 )
 
 type ClientsManager struct {
@@ -16,26 +17,27 @@ func NewClientsManager() *ClientsManager {
 	}
 }
 
-func (cm *ClientsManager) CreateClient(userID string) *Client {
+func (cm *ClientsManager) CreateClient(userID string, protocol string) (*Client, error) {
 	cm.ClientsMu.Lock()
 	defer cm.ClientsMu.Unlock()
+
+	if !IsValidProtocol(protocol) {
+		return nil, errors.New("invalid protocol")
+	}
+
+	if _, exists := cm.Clients[userID]; exists {
+		slog.Warn("Client already exists, overwriting", "userID", userID)
+	}
 
 	client := &Client{
 		UserID: userID,
+		Protocol: protocol,
 	}
 	cm.Clients[userID] = client
 	slog.Info("Client created", "userID", userID)
-	return client
+	return client, nil
 }
 
-func (cm *ClientsManager) AddClient(client *Client) {
-	cm.ClientsMu.Lock()
-	defer cm.ClientsMu.Unlock()
-
-	// TODO: Check for existing client
-	cm.Clients[client.UserID] = client
-	slog.Info("Client added", "userID", client.UserID)
-}
 
 func (cm *ClientsManager) RemoveClient(userID string) {
 	cm.ClientsMu.Lock()
@@ -63,7 +65,6 @@ func (cm *ClientsManager) RemoveClient(userID string) {
 func (cm *ClientsManager) CloseAll() {
 	for userID := range cm.Clients {
 		cm.RemoveClient(userID)
-		slog.Info("Closed client connection", "userID", userID)
 	}
 }
 
