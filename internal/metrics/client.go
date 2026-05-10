@@ -1,17 +1,17 @@
 package metrics
 
 import (
-	"context"
 	"log"
 	"sync"
 	"time"
 
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// TODO: Implement a client struct instead
 var (
 	nc          *nats.Conn
 	serviceName string
@@ -19,9 +19,9 @@ var (
 	initOnce    sync.Once
 )
 
-// InitMetrics establishes the connection to NATS.
+// InitMetricsClient establishes the connection to NATS.
 // This should be called once during application startup.
-func InitMetrics(natsURL, name string) error {
+func InitMetricsClient(natsURL, name string) error {
 	var err error
 	initOnce.Do(func() {
 		serviceName = name
@@ -45,24 +45,19 @@ func CloseMetrics() {
 
 // Transmit metric to metrics server through nats
 // Non blocking
-func TrackMetric(ctx context.Context, eventType string, data map[string]string) {
+func TrackMetric(measTime time.Time, userId string, taskId string, eventType string, payload map[string]string) {
 	if nc == nil || !nc.IsConnected() {
 		return
 	}
 
 	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		metric := &pb.MetricEvent{
-			TaskId:      uuid.NewString(), // TODO: Take from ctx
-			ServiceName: serviceName,
-			Timestamp:   uint64(time.Now().Unix()), // TODO: Take from ctx maybe?
-			EventType:   eventType,
-			Data:        data,
+		metric := &pb.MeasureEvent{
+			MeasTime:    	timestamppb.New(measTime),
+			UserId: 	 	userId,
+			TaskId:      	taskId,
+			ServiceName: 	serviceName,
+			EventType:   	eventType,
+			Payload:        payload,
 		}
 
 		marshaled, err := proto.Marshal(metric)

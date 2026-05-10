@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/BuzzingTaz/fw-edge-apps/proto";
 
 package fwproto;
@@ -52,11 +54,12 @@ message StreamSummary {
   string message = 2;
 }
 
-message MetricEvent {
-  string task_id = 1;
-  string service_name = 2;
-  uint64 timestamp = 3;
-  string event_type = 4;
-  map <string, string> data = 5;
+message MeasureEvent {
+  google.protobuf.Timestamp meas_time = 1;
+  string user_id = 2;
+  string task_id = 3;
+  string service_name = 4;
+  string event_type = 5;
+  map <string, string> payload = 6;
 }
 

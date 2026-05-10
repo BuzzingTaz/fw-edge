@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,7 +8,9 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
@@ -71,11 +72,8 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func SchedulerCallback(client *clientif.Client, message clientif.ProcessedDataMessage) {
-	ctx := context.Background()
-
-	enrichedCtx := metrics.WithTaskID(ctx, "test_task")
-
-	metrics.TrackMetric(enrichedCtx, "clientif_received_scheduler", map[string]string{
+	taskID := uuid.New().String() // TODO: Get real taskID from scheduler message
+	metrics.TrackMetric(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
 		"time": strconv.FormatUint(message.Timestamp, 10),
 	})
 
@@ -84,6 +82,7 @@ func SchedulerCallback(client *clientif.Client, message clientif.ProcessedDataMe
 		slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
 	}
 }
+
 func init() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
@@ -92,7 +91,7 @@ func init() {
 
 func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
 	defer clientsManager.CloseAll()
-	err := metrics.InitMetrics(natsURL, "clientif_metrics")
+	err := metrics.InitMetricsClient(natsURL, "clientif_metrics")
 	if err != nil {
 		slog.Warn("Failed to init metrics, metrics will not be tracked: %v", err)
 	}
