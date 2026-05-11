@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -9,9 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -23,12 +20,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-const (
-	frameX = 1280
-	frameY = 720
-)
-
-const httpServerPort = 9998
 
 var computeAddr = flag.String("compute-addr", "localhost:9997", "the address to connect to")
 var computeStreamClient pb.ComputeStreamClient
@@ -61,7 +52,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 		defer cancel()
-		// NOTE: Only creating rtp streaming for now, change to decoded frames
 		computeVideoStreamer, err := computeStreamClient.StreamVideo(ctx)
 		if err != nil {
 			log.Println("Failed to create rpc from client: %v", err)
@@ -78,7 +68,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			fmt.Println("Received message at:", message.Timestamp)
-			fmt.Println("Data length:", len(message.Payload))
 			fmt.Println(" from user:", userID)
 
 			rawBytes, err := message.Marshal()
@@ -86,7 +75,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 				log.Println("Error marshaling RTP packet:", err)
 				continue
 			}
-			// FIXME: SEND ACTUAL FRAMES LATER! This is just marshalled rtp packets
+
 			computeVideoStreamer.Send(
 				&pb.RTPPacket{Data: rawBytes})
 
@@ -132,21 +121,6 @@ func ReadInferenceData(stream grpc.BidiStreamingClient[pb.RTPPacket, pb.Inferenc
 func main() {
 	flag.Parse()
 
-	ffmpeg := exec.Command("ffmpeg", "-i", "pipe:0", "-pix_fmt", "bgr24", "-s", strconv.Itoa(frameX)+"x"+strconv.Itoa(frameY), "-f", "rawvideo", "pipe:1") //nolint
-	// ffmpegIn, _ := ffmpeg.StdinPipe()
-	// ffmpegOut, _ := ffmpeg.StdoutPipe()
-	ffmpegErr, _ := ffmpeg.StderrPipe()
-
-	if err := ffmpeg.Start(); err != nil {
-		panic(err)
-	}
-	go func() {
-		scanner := bufio.NewScanner(ffmpegErr)
-		for scanner.Scan() {
-			fmt.Println(scanner.Text())
-		}
-	}()
-
 	computeUnitConn, err := grpc.NewClient(*computeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("did not connect to compute: %v", err)
@@ -163,7 +137,7 @@ func main() {
 		}
 	}()
 
-	// frameConsumer := consumer.NewConsumer(clientID, nats URL, subscribeSubject, queueGroup)
+	// frameConsumer := scheduler.NewConsumer(clientID, nats URL, subscribeSubject, queueGroup)
 	// go frameConsumer.StartConsuming()
 
 	frameScheduler := scheduler.NewScheduler(nil, nil, []string{"node1", "node2", "node3"})
