@@ -12,19 +12,19 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
 // Client represents a connected user
 type Client struct {
-	UserID         string
-	Protocol       string
-	ClientConn     *websocket.Conn
-	SchedulerConn  *websocket.Conn
-	PeerConnection *webrtc.PeerConnection
-	DataChannel    *webrtc.DataChannel
-	Mutex          sync.Mutex
+	UserID                   string
+	Protocol                 string
+	ClientConn               *websocket.Conn
+	SchedulerConn            *websocket.Conn
+	PeerConnection           *webrtc.PeerConnection
+	DataChannel              *webrtc.DataChannel
+	SchedulerListenerHandler func(ProcessedDataMessage)
+	Mutex                    sync.Mutex
 }
 
 // TODO: Move these to a separate signaling.go file
@@ -59,7 +59,7 @@ func (client *Client) WriteSignalJSON(v ClientWsMessage) error {
 	return client.ClientConn.WriteJSON(v)
 }
 
-func (client *Client) InitiatePC() error {
+func (client *Client) InitializePC() error {
 	var err error
 	if client.Protocol != "webrtc" {
 		slog.Error("InitiatePC called with unsupported protocol", "protocol", client.Protocol)
@@ -76,66 +76,6 @@ func (client *Client) InitiatePC() error {
 	if err != nil {
 		return err
 	}
-	if _, err = client.PeerConnection.AddTransceiverFromKind(
-		webrtc.RTPCodecTypeVideo,
-		webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly},
-	); err != nil {
-		return err
-	}
-
-	// Add Data channel
-	dataChannel, err := client.PeerConnection.CreateDataChannel("data", nil)
-	if err != nil {
-		return err
-	}
-
-	client.DataChannel = dataChannel
-
-	dataChannel.OnOpen(func() {
-		slog.Info("Data channel opened", "userID", client.UserID)
-	})
-	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		slog.Info("Data channel message received", "userID", client.UserID, "message", string(msg.Data))
-	})
-
-	client.PeerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		slog.Info("Track received", "kind", track.Kind().String(), "id", track.ID())
-
-		// Ticker to send PLIs every 2 seconds to request keyframes from the client
-		go func() {
-			ticker := time.NewTicker(time.Second * 2)
-			defer ticker.Stop()
-			for range ticker.C {
-				err := client.PeerConnection.WriteRTCP([]rtcp.Packet{
-					&rtcp.PictureLossIndication{
-						MediaSSRC: uint32(track.SSRC()),
-					},
-				})
-				if err != nil {
-					// If the connection closes, exit the loop
-					return
-				}
-			}
-		}()
-		// Actual processing and streaming happens on a separate goroutine
-		go func() {
-			for {
-				rtpPacket, _, readErr := track.ReadRTP()
-				if readErr != nil {
-					slog.Error("Failed to read RTP packet", "error", readErr)
-					break
-				}
-
-				// slog.Info("Read RTP packet:", rtpPacket)
-				client.SchedulerConn.WriteJSON(rtpPacket)
-
-				// Print size of received packet
-				slog.Info("Received RTP packet", "size", rtpPacket.MarshalSize())
-
-				slog.Info("RtpPacket Payload Header:", "Header", rtpPacket.Header)
-			}
-		}()
-	})
 
 	client.PeerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -159,6 +99,10 @@ func (client *Client) InitiatePC() error {
 		slog.Info("PeerConnection State Change", "state", s.String())
 	})
 
+	return nil
+}
+
+func (client *Client) EstablishConnection() error {
 	offer, err := client.PeerConnection.CreateOffer(nil)
 	if err != nil {
 		return err
@@ -175,7 +119,6 @@ func (client *Client) InitiatePC() error {
 		},
 	}
 	return client.WriteSignalJSON(offerMsg)
-
 }
 
 func (client *Client) ListenWebRTCSignalHandler() {
@@ -190,12 +133,12 @@ func (client *Client) ListenWebRTCSignalHandler() {
 		}
 
 		if message.Signal != nil {
-			slog.Info("Received WebRTC signal", "type", message.Signal.Type)
+			slog.Info("Received WebRTC signal", "type", message.Signal.Type, "userID", client.UserID)
 			messageSignal := message.Signal
 
 			switch messageSignal.Type {
 			case "answer":
-				slog.Info("Received answer from client", "userID", client.UserID)
+				slog.Debug("Received answer from client", "userID", client.UserID)
 				answer := webrtc.SessionDescription{
 					Type: webrtc.SDPTypeAnswer,
 					SDP:  messageSignal.SDP,
@@ -203,15 +146,15 @@ func (client *Client) ListenWebRTCSignalHandler() {
 				if err = client.PeerConnection.SetRemoteDescription(answer); err != nil {
 					slog.Error("SetRemoteDescription failed", "error", err)
 				} else {
-					slog.Info("Set remote description with answer", "userID", client.UserID)
+					slog.Debug("Set remote description with answer", "userID", client.UserID)
 				}
 			case "candidate":
-				slog.Info("Received ICE candidate from client", "userID", client.UserID)
+				slog.Debug("Received ICE candidate from client", "userID", client.UserID)
 				if messageSignal.ICE != nil {
 					if err = client.PeerConnection.AddICECandidate(*messageSignal.ICE); err != nil {
 						slog.Error("AddICECandidate failed", "error", err)
 					} else {
-						slog.Info("Added ICE candidate", "userID", client.UserID)
+						slog.Debug("Added ICE candidate", "userID", client.UserID)
 					}
 				} else {
 					slog.Error("Received nil ICE candidate", "userID", client.UserID)
@@ -236,8 +179,8 @@ func (client *Client) ConnectScheduler() error {
 	return nil
 }
 
-// SendDataToPeer sends a generic message to the client via the WebRTC data channel
-func SendDataToPeer[T any](client *Client, message T) error {
+// SendDataToClient sends a generic message to the client via the WebRTC data channel
+func SendDataToClient[T any](client *Client, message T) error {
 	if client.Protocol != "webrtc" {
 		return errors.New("Unsupported protocol: " + client.Protocol)
 	}
@@ -259,25 +202,27 @@ func SendDataToPeer[T any](client *Client, message T) error {
 	return client.DataChannel.SendText(string(jsonData))
 }
 
-func ListenScheduler[T any](client *Client, callback func(*Client, T)) {
-	var message T
+func (client *Client) ListenScheduler() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
+		var message ProcessedDataMessage // Maybe make this take different message structures later?
 		err := client.SchedulerConn.ReadJSON(&message)
 		if err != nil {
+			if errors.Is(err, websocket.ErrCloseSent) || ctx.Err() != nil {
+				return
+			}
 			slog.Error("Failed to read from scheduler", "error", err)
-			break
+			time.Sleep(1 * time.Second)
+			continue
 		}
 
-		callback(client, message)
+		handler := client.SchedulerListenerHandler
+		if handler == nil {
+			slog.Warn("No scheduler listener handler set, skipping message", "userID", client.UserID)
+			continue
+		}
+		handler(message)
 	}
 }
-

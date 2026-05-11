@@ -45,7 +45,7 @@ func CloseMetrics() {
 
 // Transmit metric to metrics server through nats
 // Non blocking
-func TrackMetric(measTime time.Time, userId string, taskId string, eventType string, payload map[string]string) {
+func SampleEvent(measTime time.Time, userId string, taskId string, eventType string, payload map[string]string) {
 	if nc == nil || !nc.IsConnected() {
 		return
 	}

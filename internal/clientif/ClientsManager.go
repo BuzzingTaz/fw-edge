@@ -26,7 +26,8 @@ func (cm *ClientsManager) CreateClient(userID string, protocol string) (*Client,
 	}
 
 	if _, exists := cm.Clients[userID]; exists {
-		slog.Warn("Client already exists, overwriting", "userID", userID)
+		slog.Error("Client already exists, overwriting", "userID", userID)
+		return nil, errors.New("Client already exists")
 	}
 
 	client := &Client{

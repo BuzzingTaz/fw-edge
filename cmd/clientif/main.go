@@ -10,11 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
-
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
 	"github.com/BuzzingTaz/fw-edge-apps/internal/metrics"
+	"github.com/google/uuid"
 )
 
 var clientsManager *clientif.ClientsManager
@@ -47,44 +45,27 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to connect to scheduler: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	client.SchedulerListenerHandler = func(message clientif.ProcessedDataMessage) {
+		taskID := uuid.New().String() // TODO: Get real taskID from scheduler message
+		metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
+			"time": strconv.FormatUint(message.Timestamp, 10),
+		})
 
-	if protocol == "webrtc" {
-		slog.Info("Initiating WebRTC connection for ", "userID", userID)
-
-		var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
-		clientConn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			slog.Error("WebSocket upgrade failed", "error", err)
-			return
-		}
-		client.ClientConn = clientConn
-		slog.Info("Signalling WebSocket connection established for ", "userID", userID)
-
-		go client.ListenWebRTCSignalHandler()
-
-		go clientif.ListenScheduler(client, SchedulerCallback) // Go doesn't have generics for methods
-
-		if err := client.InitiatePC(); err != nil {
-			slog.Error("Failed to establish PeerConnection", "error", err)
-			return
+		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
+		if err := clientif.SendDataToClient(client, message); err != nil {
+			slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
 		}
 	}
-}
+	go client.ListenScheduler()
 
-func SchedulerCallback(client *clientif.Client, message clientif.ProcessedDataMessage) {
-	taskID := uuid.New().String() // TODO: Get real taskID from scheduler message
-	metrics.TrackMetric(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
-		"time": strconv.FormatUint(message.Timestamp, 10),
-	})
-
-	slog.Info("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
-	if err := clientif.SendDataToPeer(client, message); err != nil {
-		slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
+	if protocol == "webrtc" {
+		slog.Info("Initiating WebRTC connection for ", "userID", client.UserID)
+		HandleWebRTC(client, w, r)
 	}
 }
 
 func init() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 	clientsManager = clientif.NewClientsManager()
 }
