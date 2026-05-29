@@ -25,6 +25,12 @@ var natsURL = "localhost:4222"
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP to WebSocket
 	userID := r.PathValue("userID")
+	slog.Info("Incoming websocket handshake",
+	"userID", userID,
+	"remote_addr", r.RemoteAddr,
+	"user_agent", r.UserAgent(),
+	"x_forwarded_for", r.Header.Get("X-Forwarded-For"),
+)
 
 	// TODO: Improve validation
 	if userID == "" {
@@ -70,6 +76,9 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			})
 
 			slog.Info("Received processed data from scheduler", "userID", userID, "Frame Timestamp", message.Timestamp)
+			if err = client.SendDataToPeer(message); err != nil {
+				slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
+			}
 		}
 	}()
 

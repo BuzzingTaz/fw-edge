@@ -1,6 +1,7 @@
 package clientif
 
 import (
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ type Client struct {
 	ClientConn     *websocket.Conn
 	SchedulerConn  *websocket.Conn
 	PeerConnection *webrtc.PeerConnection
+	DataChannel    *webrtc.DataChannel
 	Mutex          sync.Mutex
 }
 
@@ -76,6 +78,8 @@ func (client *Client) InitiatePC() error {
 	if err != nil {
 		return err
 	}
+
+	client.DataChannel = dataChannel
 
 	dataChannel.OnOpen(func() {
 		slog.Info("Data channel opened", "userID", client.UserID)
@@ -220,4 +224,21 @@ func (client *Client) ConnectScheduler() error {
 	client.Mutex.Unlock()
 	slog.Info("Connected to scheduler WebSocket", "userID", client.UserID)
 	return nil
+}
+
+func (client *Client) SendDataToPeer(message ProcessedDataMessage) error {
+	if client.PeerConnection == nil || client.DataChannel == nil {
+		return nil
+	}
+
+	if client.DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+		return nil
+	}
+
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+
+	return client.DataChannel.SendText(string(jsonData))
 }
