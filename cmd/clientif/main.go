@@ -12,11 +12,12 @@ import (
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
 	"github.com/BuzzingTaz/fw-edge-apps/internal/metrics"
-	"github.com/google/uuid"
 )
 
 var clientsManager *clientif.ClientsManager
 var natsURL = "localhost:4222"
+
+var tsToTaskIDMap = make(map[uint64]string) // TODO: Move to within each client, and make ring buffer?
 
 func initiateHandler(w http.ResponseWriter, r *http.Request) {
 	protocol := r.PathValue("protocol")
@@ -46,15 +47,18 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client.SchedulerListenerHandler = func(message clientif.ProcessedDataMessage) {
-		taskID := uuid.New().String() // TODO: Get real taskID from scheduler message
+		taskID := tsToTaskIDMap[message.Timestamp]
 		metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
-			"time": strconv.FormatUint(message.Timestamp, 10),
+			"timestamp": strconv.FormatUint(message.Timestamp, 10),
 		})
-
 		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
+
 		if err := clientif.SendDataToClient(client, message); err != nil {
 			slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
 		}
+		metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_results_sent", map[string]string{
+			"timestamp": strconv.FormatUint(message.Timestamp, 10),
+		})
 	}
 	go client.ListenScheduler()
 

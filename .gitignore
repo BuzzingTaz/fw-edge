@@ -32,3 +32,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Go workspace file
 go.work
+
+# Ignore gRPC generated files
+*_pb2.py
+*_pb2_grpc.py
+*_pb2.pyi
+*.pb.go
+*.pb.gw.go

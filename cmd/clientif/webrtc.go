@@ -3,9 +3,12 @@ package main
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
+	"github.com/BuzzingTaz/fw-edge-apps/internal/metrics"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
@@ -99,6 +102,22 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 			if readErr != nil {
 				slog.Error("Failed to read RTP packet", "error", readErr)
 				break
+			}
+			taskID, ok := tsToTaskIDMap[uint64(rtpPacket.Timestamp)]
+			if !ok {
+				slog.Debug("RTP packet with New Timestamp received, adding to map", "timestamp", rtpPacket.Timestamp)
+				taskID = uuid.New().String()
+				tsToTaskIDMap[uint64(rtpPacket.Timestamp)] = taskID
+				metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_new_rtp_received", map[string]string{
+					"timestamp": strconv.FormatUint(uint64(rtpPacket.Timestamp), 10),
+				})
+			}
+
+			if rtpPacket.Marker {
+				slog.Debug("RTP packet with Marker bit found", "timestamp", rtpPacket.Timestamp)
+				metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_marker_rtp_received", map[string]string{
+					"timestamp": strconv.FormatUint(uint64(rtpPacket.Timestamp), 10),
+				})
 			}
 
 			client.SchedulerConn.WriteJSON(rtpPacket)
