@@ -3,23 +3,20 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/BuzzingTaz/fw-edge-apps/internal/scheduler"
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
-
 
 var computeAddr = flag.String("compute-addr", "localhost:9997", "the address to connect to")
 var computeStreamClient pb.ComputeStreamClient
@@ -29,7 +26,7 @@ var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { retu
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
-	fmt.Println("WebSocket handler called")
+	slog.Info("WebSocket handler called")
 
 	userID := r.PathValue("userID")
 
@@ -40,11 +37,11 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 
 	tempConn, err = upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Println("WebSocket upgrade failed:", err)
+		slog.Error("WebSocket upgrade failed", "err", err)
 		return
 	}
 	// defer conn.Close()
-	log.Println("WebSocket connection established for user:", userID)
+	slog.Info("WebSocket connection established for user", "userID", userID)
 
 	// go SendFrameData(...)
 	go func() {
@@ -54,7 +51,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		computeVideoStreamer, err := computeStreamClient.StreamVideo(ctx)
 		if err != nil {
-			log.Println("Failed to create rpc from client: %v", err)
+			slog.Error("Failed to create rpc from client", "err", err)
 			return
 		}
 
@@ -63,16 +60,16 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		for {
 			err = tempConn.ReadJSON(&message)
 			if err != nil {
-				fmt.Println("WebSocket read error:", err)
+				slog.Error("WebSocket read error", "err", err)
 				break
 			}
 
-			fmt.Println("Received message at:", message.Timestamp)
-			fmt.Println(" from user:", userID)
+			slog.Debug("Received message", "timestamp", message.Timestamp)
+			slog.Debug(" from user", "userID", userID)
 
 			rawBytes, err := message.Marshal()
 			if err != nil {
-				log.Println("Error marshaling RTP packet:", err)
+				slog.Error("Error marshaling RTP packet", "err", err)
 				continue
 			}
 
@@ -92,30 +89,33 @@ func ReadInferenceData(stream grpc.BidiStreamingClient[pb.RTPPacket, pb.Inferenc
 	for {
 		inferenceData, err := stream.Recv()
 		if err == io.EOF {
-			log.Println("Server closed the inference stream.")
+			slog.Info("Server closed the inference stream.")
 			return
 		}
 		if err != nil {
-			log.Printf("Error receiving inference data: %v", err)
+			slog.Error("Error receiving inference data", "err", err)
 			return
 		}
 
-		// Process your inference data here!
-		log.Printf("Received processed data for frame timestamp  %d: %d (%d detections)",
-			inferenceData.Timestamp, inferenceData.ProcessingStatus, len(inferenceData.Detections))
+		slog.Info("Received inference results", "timestamp", inferenceData.Timestamp, "processingStatus", inferenceData.ProcessingStatus, "detections", len(inferenceData.Detections))
 
 		if tempConn != nil {
 			err = tempConn.WriteJSON(inferenceData)
 			if err != nil {
-				log.Printf("Error sending inference data to client: %v", err)
+				slog.Error("Error sending inference data to client", "err", err)
 				return
 			}
-			log.Println("Sent inference data back to client for frame", inferenceData.Timestamp)
+			slog.Debug("Sent inference data back to client for frame", "timestamp", inferenceData.Timestamp)
 		} else {
-			log.Println("No WebSocket connection to send inference data to client.")
+			slog.Warn("No WebSocket connection to send inference data to client.")
 		}
 
 	}
+}
+
+func init() {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
 }
 
 func main() {
@@ -123,30 +123,31 @@ func main() {
 
 	computeUnitConn, err := grpc.NewClient(*computeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("did not connect to compute: %v", err)
+		slog.Error("did not connect to compute", "err", err)
 	}
 	defer computeUnitConn.Close()
+
 	computeStreamClient = pb.NewComputeStreamClient(computeUnitConn)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { fmt.Println("Bello!") })
 	http.HandleFunc("/ws/{userID}", wsHandler)
-	fmt.Println("Server starting on :9998")
+
+	slog.Info("Server starting on :9998")
 	go func() {
 		if err := http.ListenAndServe(":9998", nil); err != nil {
-			fmt.Println("Failed to start server:", err)
+			slog.Error("Failed to start server", "err", err)
 		}
 	}()
 
 	// frameConsumer := scheduler.NewConsumer(clientID, nats URL, subscribeSubject, queueGroup)
 	// go frameConsumer.StartConsuming()
 
-	frameScheduler := scheduler.NewScheduler(nil, nil, []string{"node1", "node2", "node3"})
-	fmt.Println(frameScheduler)
+	// frameScheduler := scheduler.NewScheduler(nil, nil, []string{"node1", "node2", "node3"})
+	// fmt.Println(frameScheduler)
 	// go frameScheduler.Run()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	fmt.Println("\nShutdown signal received. Exiting.")
+	slog.Info("\nShutdown signal received. Exiting.")
 }

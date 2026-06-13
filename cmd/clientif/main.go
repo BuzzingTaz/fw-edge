@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
-	"github.com/BuzzingTaz/fw-edge-apps/internal/metrics"
+	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
 )
 
 var clientsManager *clientif.ClientsManager
-var natsURL = "localhost:4222"
+var natsURL = "nats://localhost:4222"
 
 var tsToTaskIDMap = make(map[uint64]string) // TODO: Move to within each client, and make ring buffer?
 
@@ -35,20 +35,20 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 
 	client, err := clientsManager.CreateClient(userID, protocol)
 	if err != nil {
-		slog.Error("Failed to create client ", err)
+		slog.Error("Failed to create client", "err", err)
 		http.Error(w, "Failed to create client: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = client.ConnectScheduler()
 	if err != nil {
-		slog.Error("Failed to connect to scheduler ", err)
+		slog.Error("Failed to connect to scheduler", "err", err)
 		http.Error(w, "Failed to connect to scheduler: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	client.SchedulerListenerHandler = func(message clientif.ProcessedDataMessage) {
 		taskID := tsToTaskIDMap[message.Timestamp]
-		metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
+		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
 			"timestamp": strconv.FormatUint(message.Timestamp, 10),
 		})
 		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
@@ -56,7 +56,7 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 		if err := clientif.SendDataToClient(client, message); err != nil {
 			slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
 		}
-		metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_results_sent", map[string]string{
+		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_sent", map[string]string{
 			"timestamp": strconv.FormatUint(message.Timestamp, 10),
 		})
 	}
@@ -76,11 +76,11 @@ func init() {
 
 func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
 	defer clientsManager.CloseAll()
-	err := metrics.InitMetricsClient(natsURL, "clientif_metrics")
+	err := eventsingest.Initialize(natsURL, "clientif_events")
 	if err != nil {
-		slog.Warn("Failed to init metrics, metrics will not be tracked: %v", err)
+		slog.Warn("Failed to init events ingest client, telemetry will not be tracked", "err", err)
 	}
-	defer metrics.CloseMetrics()
+	defer eventsingest.Close()
 
 	http.HandleFunc("/initiate/{protocol}/{userID}", initiateHandler)
 	go func() {

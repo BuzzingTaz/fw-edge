@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
-	"github.com/BuzzingTaz/fw-edge-apps/internal/metrics"
+	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtcp"
@@ -105,25 +105,25 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 			}
 			taskID, ok := tsToTaskIDMap[uint64(rtpPacket.Timestamp)]
 			if !ok {
-				slog.Debug("RTP packet with New Timestamp received, adding to map", "timestamp", rtpPacket.Timestamp)
+				slog.Info("RTP packet with New Timestamp received, adding to map", "timestamp", rtpPacket.Timestamp)
 				taskID = uuid.New().String()
 				tsToTaskIDMap[uint64(rtpPacket.Timestamp)] = taskID
-				metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_new_rtp_received", map[string]string{
+				eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_new_rtp_received", map[string]string{
 					"timestamp": strconv.FormatUint(uint64(rtpPacket.Timestamp), 10),
 				})
 			}
 
 			if rtpPacket.Marker {
 				slog.Debug("RTP packet with Marker bit found", "timestamp", rtpPacket.Timestamp)
-				metrics.SampleEvent(time.Now(), client.UserID, taskID, "clientif_marker_rtp_received", map[string]string{
+				eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_marker_rtp_received", map[string]string{
 					"timestamp": strconv.FormatUint(uint64(rtpPacket.Timestamp), 10),
 				})
 			}
 
 			client.SchedulerConn.WriteJSON(rtpPacket)
 
-			slog.Debug("Read RTP packet:", rtpPacket)
-			slog.Info("Received RTP packet", "size", rtpPacket.MarshalSize())
+			slog.Debug("Read RTP packet:", "rtpPacket", rtpPacket)
+			slog.Debug("Received RTP packet", "size", rtpPacket.MarshalSize())
 		}
 	})
 

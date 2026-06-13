@@ -127,7 +127,7 @@ func (client *Client) ListenWebRTCSignalHandler() {
 		err := client.ClientConn.ReadJSON(&message)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				slog.Error("WS closed unexpectedly: ", err)
+				slog.Error("WS closed unexpectedly", "err", err)
 			}
 			break
 		}

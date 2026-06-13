@@ -1,12 +1,12 @@
-package metrics
+package eventsingest
 
 import "context"
 
 type contextKey string
 
 const (
-	ContextKeyUserID contextKey = "metrics_user_id"
-	ContextKeyTaskID contextKey = "metrics_task_id"
+	ContextKeyUserID contextKey = "events_user_id"
+	ContextKeyTaskID contextKey = "events_task_id"
 )
 
 // WithUserID returns a context with the user ID attached.
