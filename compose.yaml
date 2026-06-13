@@ -1,0 +1,86 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg18
+    restart: unless-stopped
+    container_name: measurement_events_db
+    hostname: measurement_events_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /pgdata/data
+    secrets:
+      - db_user
+      - db_password
+    volumes:
+      - ./data:/pgdata
+
+  nats:
+    image: nats:alpine
+    container_name: nats_broker
+    hostname: nats
+    ports:
+      - "4222:4222" # Client connections
+      - "8222:8222" # HTTP management/monitoring dashboard
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - ./nats-data:/data
+    command: ["-c", "/etc/nats/nats.conf"]
+    restart: unless-stopped
+    # TODO: Implement healthcheck to make sure nats is listening before dependent services start
+
+  eventsingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: eventsingest
+    env_file:
+      - .env
+    ports:
+      - "8888:8888"
+    environment:
+      - DB_USER=/run/secrets/db_user
+      - DB_PASSWORD=/run/secrets/db_password
+    secrets:
+      - db_user
+      - db_password
+    depends_on:
+      - db
+      - nats
+
+  clientif:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: clientif
+    network_mode: host
+    # ports:
+      # - "9999:9999" # WebSocket signaling
+      # IMPORTANT: WebRTC via Pion requires exposing a range of UDP ports for ICE/RTP traffic.
+      # You will need to configure Pion's SettingEngine to use a specific port range
+      # and expose them here, otherwise the media streams will fail to connect.
+      # - "50000-50100:50000-50100/udp"
+    depends_on:
+      - eventsingest
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: scheduler
+    command: ["./service", "--compute-addr=${COMPUTE_ADDR:-10.42.0.229:9997}"]
+    network_mode: host
+    # ports:
+    #   - "9998:9998"
+    depends_on:
+      - eventsingest
+
+secrets:
+  db_user:
+    environment: "TSDB_USER"
+  db_password:
+    environment: "TSDB_PASSWORD"
