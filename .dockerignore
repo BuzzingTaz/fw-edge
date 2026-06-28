@@ -1,0 +1,7 @@
+data/
+nats-data/
+nats.conf
+proto/*.pb.go
+.git/
+.idea/
+.vscode/

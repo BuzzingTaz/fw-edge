@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/BuzzingTaz/fw-edge-apps/proto";
+
+package fwproto;
+
+service ComputeStream {
+
+  // Basic implementation for one frame at a time
+  // Recommended to use streams for larger images
+  rpc OffloadImage(DecodedFrame) returns (InferenceResult);
+
+  // The client streams RTP packets to the server, receives a stream of corresponding inference results
+  rpc StreamVideo(stream RTPPacket) returns (stream InferenceResult);
+
+  // Alternate path to stream decoded video directly
+  rpc StreamDecodedVideo(stream DecodedFrame) returns (stream InferenceResult);
+}
+
+message DecodedFrame {
+  uint64 timestamp = 1;
+  bytes frame_data = 2;
+}
+
+message InferenceResult {
+  uint64 timestamp = 1;
+  uint64 processing_status = 2;
+  repeated BoundingBox detections = 3;
+}
+
+message BoundingBox {
+  uint64 x = 1;
+  uint64 y = 2;
+  uint64 dx = 3;
+  uint64 dy = 5;
+  string label = 6;
+  float confidence = 7;
+}
+
+
+message RTPPacket {
+  // The raw, serialized bytes of the RTP packet
+  bytes data = 1;
+
+  // Optional metadata for easy routing/logging on the server side
+  string track_id = 2;
+  uint32 ssrc = 3;
+}
+
+message StreamSummary {
+  int32 packets_received = 1;
+  string message = 2;
+}
+
+message MeasureEvent {
+  google.protobuf.Timestamp meas_time = 1;
+  string user_id = 2;
+  string task_id = 3;
+  string service_name = 4;
+  string event_type = 5;
+  map <string, string> payload = 6;
+}
+

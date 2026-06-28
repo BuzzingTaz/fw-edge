@@ -1,0 +1,107 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
+	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
+)
+
+var clientsManager *clientif.ClientsManager
+var natsURL = "nats://localhost:4222"
+var schedulerURL = flag.String("scheduler-url", "ws://localhost:9998", "URL of the scheduler WebSocket server")
+
+var tsToTaskIDMap = make(map[uint64]string) // TODO: Move to within each client, and make ring buffer?
+
+func initiateHandler(w http.ResponseWriter, r *http.Request) {
+	protocol := r.PathValue("protocol")
+	if !clientif.IsValidProtocol(protocol) {
+		http.Error(w, "Invalid protocol", http.StatusBadRequest)
+		return
+	}
+
+	userID := r.PathValue("userID")
+	if userID == "" {
+		// TODO: Improve validation
+		http.Error(w, "userID is required", http.StatusBadRequest)
+		return
+	}
+
+	client, err := clientsManager.CreateClient(userID, protocol)
+	if err != nil {
+		slog.Error("Failed to create client", "err", err)
+		http.Error(w, "Failed to create client: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	client.SchedulerURL = *schedulerURL
+
+	err = client.ConnectScheduler()
+	if err != nil {
+		slog.Error("Failed to connect to scheduler", "err", err)
+		http.Error(w, "Failed to connect to scheduler: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	client.SchedulerListenerHandler = func(message clientif.ProcessedDataMessage) {
+		taskID := tsToTaskIDMap[message.Timestamp]
+		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
+			"timestamp": strconv.FormatUint(message.Timestamp, 10),
+		})
+		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
+
+		if err := clientif.SendDataToClient(client, message); err != nil {
+			slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
+		}
+		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_sent", map[string]string{
+			"timestamp": strconv.FormatUint(message.Timestamp, 10),
+		})
+	}
+	go client.ListenScheduler()
+
+	if protocol == "webrtc" {
+		slog.Info("Initiating WebRTC connection for ", "userID", client.UserID)
+		HandleWebRTC(client, w, r)
+	}
+}
+
+func init() {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	clientsManager = clientif.NewClientsManager()
+}
+
+func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
+	flag.Parse()
+	defer clientsManager.CloseAll()
+	err := eventsingest.Initialize(natsURL, "clientif_events")
+	if err != nil {
+		slog.Warn("Failed to init events ingest client, telemetry will not be tracked", "err", err)
+	}
+	defer eventsingest.Close()
+
+	// CORS header allows the React frontend (running on a different port or host)
+	// to open the WebSocket signaling connection without a preflight rejection.
+	http.HandleFunc("/initiate/{protocol}/{userID}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		initiateHandler(w, r)
+	})
+	go func() {
+		slog.Info("Starting server on :9999")
+		if err := http.ListenAndServe(":9999", nil); err != nil {
+			slog.Error("Server failed", "error", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+
+	fmt.Println("\nShutdown signal received. Exiting.")
+}
