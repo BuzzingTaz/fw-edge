@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,8 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Client represents a connected user
@@ -20,7 +24,8 @@ type Client struct {
 	UserID                   string
 	Protocol                 string
 	ClientConn               *websocket.Conn
-	SchedulerConn            *websocket.Conn
+	SchedulerGRPCConn        *grpc.ClientConn
+	SchedulerStream          grpc.BidiStreamingClient[pb.StreamVideoRequest, pb.InferenceResult]
 	PeerConnection           *webrtc.PeerConnection
 	DataChannel              *webrtc.DataChannel
 	SchedulerListenerHandler func(ProcessedDataMessage)
@@ -168,14 +173,23 @@ func (client *Client) ListenWebRTCSignalHandler() {
 }
 
 func (client *Client) ConnectScheduler() error {
-	schedulerConn, _, err := websocket.DefaultDialer.Dial("ws://localhost:9998/ws/"+client.UserID, nil)
+	schedulerConn, err := grpc.NewClient("localhost:5000", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
+
+	schedulerClient := pb.NewVideoStreamServiceClient(schedulerConn)
+	stream, err := schedulerClient.StreamVideo(context.Background())
+	if err != nil {
+		schedulerConn.Close()
+		return err
+	}
+
 	client.Mutex.Lock()
-	client.SchedulerConn = schedulerConn
+	client.SchedulerGRPCConn = schedulerConn
+	client.SchedulerStream = stream
 	client.Mutex.Unlock()
-	slog.Info("Connected to scheduler WebSocket", "userID", client.UserID)
+	slog.Info("Connected to scheduler gRPC", "userID", client.UserID)
 	return nil
 }
 
@@ -207,15 +221,36 @@ func (client *Client) ListenScheduler() {
 	defer stop()
 
 	for {
-		var message ProcessedDataMessage // Maybe make this take different message structures later?
-		err := client.SchedulerConn.ReadJSON(&message)
+		result, err := client.SchedulerStream.Recv()
 		if err != nil {
-			if errors.Is(err, websocket.ErrCloseSent) || ctx.Err() != nil {
+			if errors.Is(err, io.EOF) || ctx.Err() != nil {
 				return
 			}
 			slog.Error("Failed to read from scheduler", "error", err)
 			time.Sleep(1 * time.Second)
 			continue
+		}
+
+		message := ProcessedDataMessage{
+			Timestamp:        result.GetTimestamp(),
+			ProcessingStatus: int(result.GetProcessingStatus()),
+		}
+		for _, detection := range result.GetDetections() {
+			message.Detections = append(message.Detections, struct {
+				X          int     `json:"x"`
+				Y          int     `json:"y"`
+				Dx         int     `json:"dx"`
+				Dy         int     `json:"dy"`
+				Label      string  `json:"label"`
+				Confidence float64 `json:"confidence"`
+			}{
+				X:          int(detection.GetX()),
+				Y:          int(detection.GetY()),
+				Dx:         int(detection.GetDx()),
+				Dy:         int(detection.GetDy()),
+				Label:      detection.GetLabel(),
+				Confidence: float64(detection.GetConfidence()),
+			})
 		}
 
 		handler := client.SchedulerListenerHandler

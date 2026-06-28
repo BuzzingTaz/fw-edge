@@ -4,15 +4,36 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
 	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
+	"github.com/BuzzingTaz/fw-edge-apps/internal/utils"
+	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
 )
+
+func depacketizerForCodec(mimeType string) rtp.Depacketizer {
+	switch strings.ToLower(mimeType) {
+	case strings.ToLower(webrtc.MimeTypeVP8):
+		return &codecs.VP8Packet{}
+	case strings.ToLower(webrtc.MimeTypeVP9):
+		return &codecs.VP9Packet{}
+	case strings.ToLower(webrtc.MimeTypeH264):
+		return &codecs.H264Packet{}
+	case strings.ToLower(webrtc.MimeTypeH265):
+		return &codecs.H265Packet{}
+	default:
+		return nil
+	}
+}
 
 func HandleWebRTC(client *clientif.Client, w http.ResponseWriter, r *http.Request) {
 	var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -96,6 +117,27 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 			}
 		}()
 
+		codec := track.Codec()
+		depacketizer := depacketizerForCodec(codec.MimeType)
+		if depacketizer == nil {
+			slog.Error("Unsupported video codec", "userID", client.UserID, "mimeType", codec.MimeType)
+			return
+		}
+		sampleBuilder := samplebuilder.New(250, depacketizer, codec.ClockRate)
+
+		if err := client.SchedulerStream.Send(&pb.StreamVideoRequest{
+			Payload: &pb.StreamVideoRequest_Metadata{
+				Metadata: &pb.Metadata{
+					ClientId: client.UserID,
+					TrackId:  track.ID(),
+					MimeType: codec.MimeType,
+				},
+			},
+		}); err != nil {
+			slog.Error("Failed to send stream metadata to scheduler", "error", err)
+			return
+		}
+
 		// Loop here is fine since it's a separate goroutine
 		for {
 			rtpPacket, _, readErr := track.ReadRTP()
@@ -103,24 +145,44 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 				slog.Error("Failed to read RTP packet", "error", readErr)
 				break
 			}
-			taskID, ok := tsToTaskIDMap[uint64(rtpPacket.Timestamp)]
-			if !ok {
-				slog.Info("RTP packet with New Timestamp received, adding to map", "timestamp", rtpPacket.Timestamp)
-				taskID = uuid.New().String()
-				tsToTaskIDMap[uint64(rtpPacket.Timestamp)] = taskID
-				eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_new_rtp_received", map[string]string{
-					"timestamp": strconv.FormatUint(uint64(rtpPacket.Timestamp), 10),
-				})
-			}
 
-			if rtpPacket.Marker {
-				slog.Debug("RTP packet with Marker bit found", "timestamp", rtpPacket.Timestamp)
-				eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_marker_rtp_received", map[string]string{
-					"timestamp": strconv.FormatUint(uint64(rtpPacket.Timestamp), 10),
-				})
-			}
+			sampleBuilder.Push(rtpPacket)
 
-			client.SchedulerConn.WriteJSON(rtpPacket)
+			for sample := sampleBuilder.Pop(); sample != nil; sample = sampleBuilder.Pop() {
+				timestamp := uint64(sample.PacketTimestamp)
+				taskID, ok := tsToTaskIDMap[timestamp]
+				if !ok {
+					slog.Info("Encoded frame with new timestamp received, adding to map", "timestamp", timestamp)
+					taskID = uuid.New().String()
+					tsToTaskIDMap[timestamp] = taskID
+					eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_new_frame_received", map[string]string{
+						"timestamp": strconv.FormatUint(timestamp, 10),
+					})
+				}
+
+				sampleBytes, err := utils.MarshalMediaSample(sample)
+				if err != nil {
+					slog.Error("Failed to marshal media sample", "error", err)
+					continue
+				}
+
+				encodedFrame := &pb.EncodedFrame{
+					Data:     sampleBytes,
+					TrackId:  track.ID(),
+					Ssrc:     uint32(track.SSRC()),
+					MimeType: codec.MimeType,
+				}
+				if err := client.SchedulerStream.Send(&pb.StreamVideoRequest{
+					Payload: &pb.StreamVideoRequest_EncodedFrame{
+						EncodedFrame: encodedFrame,
+					},
+				}); err != nil {
+					slog.Error("Failed to send encoded frame to scheduler", "error", err)
+					return
+				}
+
+				slog.Debug("Sent encoded frame to scheduler", "timestamp", timestamp, "payload_size", len(sampleBytes), "frame_size", len(sample.Data))
+			}
 
 			slog.Debug("Read RTP packet:", "rtpPacket", rtpPacket)
 			slog.Debug("Received RTP packet", "size", rtpPacket.MarshalSize())

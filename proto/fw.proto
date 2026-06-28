@@ -15,6 +15,8 @@ service ComputeStream {
   // The client streams RTP packets to the server, receives a stream of corresponding inference results
   rpc StreamVideo(stream RTPPacket) returns (stream InferenceResult);
 
+  rpc StreamEncodedFrames(stream EncodedFrame) returns (stream InferenceResult);
+
   // Alternate path to stream decoded video directly
   rpc StreamDecodedVideo(stream DecodedFrame) returns (stream InferenceResult);
 }
@@ -34,11 +36,10 @@ message BoundingBox {
   uint64 x = 1;
   uint64 y = 2;
   uint64 dx = 3;
-  uint64 dy = 5;
-  string label = 6;
-  float confidence = 7;
+  uint64 dy = 4;
+  string label = 5;
+  float confidence = 6;
 }
-
 
 message RTPPacket {
   // The raw, serialized bytes of the RTP packet
@@ -47,6 +48,42 @@ message RTPPacket {
   // Optional metadata for easy routing/logging on the server side
   string track_id = 2;
   uint32 ssrc = 3;
+}
+
+service VideoStreamService {
+  rpc StreamVideo(stream StreamVideoRequest) returns (stream InferenceResult);
+}
+
+message EncodedFrame {
+  // Serialized MediaSample
+  bytes data = 1;
+
+  // Optional metadata for easy routing/logging on the server side
+  string track_id = 2;
+  uint32 ssrc = 3;
+  string mime_type = 4;
+}
+
+message MediaSample {
+  bytes data = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int64 duration_ns = 3;
+  uint32 packet_timestamp = 4;
+  uint32 prev_dropped_packets = 5;
+  bytes metadata = 6;
+}
+
+message Metadata {
+  string track_id = 1;
+  string client_id = 2;
+  string mime_type = 3;
+}
+
+message StreamVideoRequest {
+  oneof payload {
+    Metadata metadata = 1;
+    EncodedFrame encoded_frame = 2;
+  }
 }
 
 message StreamSummary {

@@ -45,18 +45,25 @@ func (cm *ClientsManager) RemoveClient(userID string) {
 	defer cm.ClientsMu.Unlock()
 
 	// TODO: Better cleanup (close connections, etc.)
-	err := cm.Clients[userID].ClientConn.Close()
+	client := cm.Clients[userID]
+
+	err := client.ClientConn.Close()
 	if err != nil {
 		slog.Error("Failed to close WebSocket", "error", err)
 	}
-	err = cm.Clients[userID].PeerConnection.Close()
+	err = client.PeerConnection.Close()
 	if err != nil {
 		slog.Error("Failed to close PeerConnection", "error", err)
 	}
 
-	err = cm.Clients[userID].SchedulerConn.Close()
-	if err != nil {
-		slog.Error("Failed to close Scheduler WebSocket", "error", err)
+	if client.SchedulerStream != nil {
+		client.SchedulerStream.CloseSend()
+	}
+	if client.SchedulerGRPCConn != nil {
+		err = client.SchedulerGRPCConn.Close()
+		if err != nil {
+			slog.Error("Failed to close scheduler gRPC connection", "error", err)
+		}
 	}
 
 	delete(cm.Clients, userID)

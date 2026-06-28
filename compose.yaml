@@ -59,10 +59,7 @@ services:
     network_mode: host
     # ports:
       # - "9999:9999" # WebSocket signaling
-      # IMPORTANT: WebRTC via Pion requires exposing a range of UDP ports for ICE/RTP traffic.
-      # You will need to configure Pion's SettingEngine to use a specific port range
-      # and expose them here, otherwise the media streams will fail to connect.
-      # - "50000-50100:50000-50100/udp"
+      # - "50000-50100:50000-50100/udp" # WebRTC requires exposing a range of UDP ports
     depends_on:
       - eventsingest
 
@@ -71,7 +68,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        SERVICE_NAME: scheduler
+        SERVICE_NAME: scheduler3
     command: ["./service", "--compute-addr=${COMPUTE_ADDR:-10.42.0.229:9997}"]
     network_mode: host
     # ports:

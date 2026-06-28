@@ -1,174 +1,145 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"sync"
-	"time"
+	"strings"
 
-	pbcompute "github.com/BuzzingTaz/fw-edge-apps/cmd/compute/edge-compute-yolo"
+	"github.com/BuzzingTaz/fw-edge-apps/internal/utils"
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
-	"github.com/pion/rtp"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
 	port = flag.Int("port", 9997, "The server port")
 )
 
-type InferenceCache struct {
-	mu    sync.RWMutex
-	Boxes []*pb.BoundingBox
-}
-
-var sharedInferenceCache = &InferenceCache{}
-
-type inferenceServer struct {
-	pbcompute.UnimplementedInferenceTrackerServer
-}
-
-// StreamResults receives the continuous stream of bounding boxes from Python
-func (s *inferenceServer) StreamResults(stream pbcompute.InferenceTracker_StreamResultsServer) error {
-	log.Println("Python inference client connected to gRPC stream!")
-
-	for {
-		res, err := stream.Recv()
-		if err == io.EOF {
-			log.Println("Python client cleanly closed the gRPC stream.")
-			return stream.SendAndClose(&pbcompute.Ack{Received: true})
-		}
-		if err != nil {
-			log.Printf("gRPC stream error (Python likely disconnected): %v", err)
-			return err
-		}
-
-		var newDetections []*pb.BoundingBox
-		log.Printf("Received %d bounding boxes at timestamp %d", len(res.Boxes), res.Timestamp)
-
-		for _, box := range res.Boxes {
-			newDetections = append(newDetections, &pb.BoundingBox{
-				X:          uint64(box.X),
-				Y:          uint64(box.Y),
-				Dx:         uint64(box.W),
-				Dy:         uint64(box.H),
-				Label:      box.ClassLabel,
-				Confidence: box.Confidence,
-			})
-		}
-
-		sharedInferenceCache.mu.Lock()
-		sharedInferenceCache.Boxes = newDetections
-		sharedInferenceCache.mu.Unlock()
-	}
-}
+const udsSocketPath = "/tmp/edge_compute_inference.sock"
 
 type computeStreamServer struct {
 	pb.UnimplementedComputeStreamServer
 }
 
-func (*computeStreamServer) StreamVideo(stream grpc.BidiStreamingServer[pb.RTPPacket, pb.InferenceResult]) error {
-	conn, err := net.Dial("udp", "127.0.0.1:5000")
+const (
+	codecUnknown uint8 = 0
+	codecVP8     uint8 = 1
+	codecH264    uint8 = 2
+	codecVP9     uint8 = 3
+	codecH265    uint8 = 4
+)
+
+func codecIDFromMimeType(mimeType string) uint8 {
+	switch {
+	case strings.Contains(strings.ToLower(mimeType), "vp8"):
+		return codecVP8
+	case strings.Contains(strings.ToLower(mimeType), "h264"):
+		return codecH264
+	case strings.Contains(strings.ToLower(mimeType), "vp9"):
+		return codecVP9
+	case strings.Contains(strings.ToLower(mimeType), "h265"), strings.Contains(strings.ToLower(mimeType), "hevc"):
+		return codecH265
+	default:
+		return codecUnknown
+	}
+}
+
+// sendEncodedFrameToUDS writes length-prefixed frame data to the Unix socket
+func sendEncodedFrameToUDS(conn net.Conn, packetTimestamp uint32, codecID uint8, encodedData []byte) error {
+	// [packet_timestamp u32 BE][data_len u32 BE][codec u8][encoded frame bytes]
+	buf := make([]byte, 9+len(encodedData))
+	binary.BigEndian.PutUint32(buf[0:4], packetTimestamp)
+	binary.BigEndian.PutUint32(buf[4:8], uint32(len(encodedData)))
+	buf[8] = codecID
+	copy(buf[9:], encodedData)
+	_, err := conn.Write(buf)
+	return err
+}
+
+func (*computeStreamServer) StreamEncodedFrames(stream grpc.BidiStreamingServer[pb.EncodedFrame, pb.InferenceResult]) error {
+	conn, err := net.Dial("unix", udsSocketPath)
 	if err != nil {
-		log.Fatalf("Failed to connect to UDP server: %v", err)
+		log.Printf("Failed to connect to Python UDS server at %s: %v", udsSocketPath, err)
+		return err
 	}
 	defer conn.Close()
-	log.Println("UDP connection established to localhost:5000")
+	log.Println("UDS connection established to Python inference engine.")
 
 	errChan := make(chan error, 2)
 
-	packetCount := 0
-	var latestRTPTimestamp uint64
-	var tsMutex sync.RWMutex
-
+	// Goroutine 1: Read incoming inferences from Python UDS and forward to gRPC client
 	go func() {
+		lenBuf := make([]byte, 4)
 		for {
-			frame, err := stream.Recv()
-			if err == io.EOF {
-				// Stream closed by the client
-				log.Println("Client finished sending frames.")
-				errChan <- nil
+			// Read 4-byte length prefix
+			if _, err := io.ReadFull(conn, lenBuf); err != nil {
+				if err != io.EOF {
+					log.Printf("Error reading length from UDS: %v", err)
+				}
+				errChan <- err
 				return
 			}
-			if err != nil {
-				log.Printf("Error receiving frame: %v", err)
+			msgLen := binary.BigEndian.Uint32(lenBuf)
+
+			// Read Protobuf payload
+			msgBuf := make([]byte, msgLen)
+			if _, err := io.ReadFull(conn, msgBuf); err != nil {
+				log.Printf("Error reading payload from UDS: %v", err)
 				errChan <- err
 				return
 			}
 
-			// 2. Unmarshal the raw bytes back into an RTP Packet
-			packet := &rtp.Packet{}
-			if err := packet.Unmarshal(frame.Data); err == nil {
-				tsMutex.Lock()
-				latestRTPTimestamp = uint64(packet.Timestamp)
-				packetCount++
-				tsMutex.Unlock()
+			var result pb.InferenceResult
+			if err := proto.Unmarshal(msgBuf, &result); err != nil {
+				log.Printf("Error unmarshaling InferenceResult from UDS: %v", err)
+				continue
 			}
-			log.Printf("packet received with timestamp %v", packet.Timestamp)
 
-			conn.Write(frame.Data)
+			if err := stream.Send(&result); err != nil {
+				log.Printf("Error sending inference data to gRPC client: %v", err)
+				errChan <- err
+				return
+			}
 		}
 	}()
 
+	// Goroutine 2: Receive encoded frames from gRPC client and send to Python UDS
 	go func() {
-
-		ticker := time.NewTicker(33 * time.Millisecond) // Send results back at 30/s
-		defer ticker.Stop()
 		for {
-			select {
-			case <-stream.Context().Done():
-				// If the parent context cancels (client disconnects), kill this loop
-				errChan <- stream.Context().Err()
+			encodedFrame, err := stream.Recv()
+			if err == io.EOF {
+				log.Println("Client finished sending encoded frames.")
+				errChan <- nil
 				return
-			case <-ticker.C:
+			}
+			if err != nil {
+				log.Printf("Error receiving encoded frame: %v", err)
+				errChan <- err
+				return
+			}
 
-				// Could have race condition if cache is being updated faster than ticker
-				sharedInferenceCache.mu.Lock()
-				currentBoxes := sharedInferenceCache.Boxes
-				sharedInferenceCache.Boxes = nil
-				sharedInferenceCache.mu.Unlock()
+			sample, err := utils.UnmarshalMediaSample(encodedFrame.GetData())
+			if err != nil {
+				log.Printf("Error unmarshaling MediaSample from EncodedFrame: %v", err)
+				continue
+			}
 
-				if currentBoxes == nil {
-					continue
-				}
+			log.Printf("EncodedFrame received, packet_timestamp=%d track_id=%s mime_type=%s frame_size=%d",
+				sample.PacketTimestamp, encodedFrame.GetTrackId(), encodedFrame.GetMimeType(), len(sample.Data))
 
-				tsMutex.RLock()
-				ts := latestRTPTimestamp
-				tsMutex.RUnlock()
-
-				err := stream.Send(&pb.InferenceResult{
-					Timestamp:        ts,
-					ProcessingStatus: 0,
-					Detections:       currentBoxes,
-				})
-
-				if err != nil {
-					log.Printf("Error sending inference data to client: %v", err)
-					errChan <- err
-					return
-				}
+			if err := sendEncodedFrameToUDS(conn, sample.PacketTimestamp, codecIDFromMimeType(encodedFrame.GetMimeType()), sample.Data); err != nil {
+				log.Printf("Error forwarding encoded frame to Python: %v", err)
+				errChan <- err
+				return
 			}
 		}
 	}()
 
 	return <-errChan
-}
-
-func startComputeGRPCServer() {
-	lis, err := net.Listen("tcp", ":5005")
-	if err != nil {
-		log.Fatalf("Failed to listen on gRPC port 5005: %v", err)
-	}
-
-	s := grpc.NewServer()
-	pbcompute.RegisterInferenceTrackerServer(s, &inferenceServer{})
-
-	log.Println("Go compute gRPC server listening on :5005")
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("Failed to serve gRPC: %v", err)
-	}
 }
 
 func startSchedulerGRPCServer() {
@@ -189,7 +160,6 @@ func startSchedulerGRPCServer() {
 func main() {
 	flag.Parse()
 
-	go startComputeGRPCServer()
 	go startSchedulerGRPCServer()
 
 	select {}

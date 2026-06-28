@@ -39,3 +39,6 @@ go.work
 *_pb2.pyi
 *.pb.go
 *.pb.gw.go
+
+data/
+nats-data/
