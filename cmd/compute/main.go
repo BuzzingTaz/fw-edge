@@ -137,8 +137,8 @@ func (*computeStreamServer) StreamEncodedFrames(stream grpc.BidiStreamingServer[
 				continue
 			}
 
-			log.Printf("EncodedFrame received, packet_timestamp=%d taskID=%s mime_type=%s frame_size=%d",
-				sample.PacketTimestamp, encodedFrame.GetTaskId(), encodedFrame.GetMimeType(), len(sample.Data))
+			// log.Printf("EncodedFrame received, packet_timestamp=%d taskID=%s mime_type=%s frame_size=%d",
+			// 	sample.PacketTimestamp, encodedFrame.GetTaskId(), encodedFrame.GetMimeType(), len(sample.Data))
 
 			err = sendEncodedFrameToUDS(
 				conn,
