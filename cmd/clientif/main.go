@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 var clientsManager *clientif.ClientsManager
 var natsURL = "nats://localhost:4222"
+var schedulerURL = flag.String("scheduler-url", "ws://localhost:9998", "URL of the scheduler WebSocket server")
 
 var tsToTaskIDMap = make(map[uint64]string) // TODO: Move to within each client, and make ring buffer?
 
@@ -39,6 +41,7 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create client: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	client.SchedulerURL = *schedulerURL
 
 	err = client.ConnectScheduler()
 	if err != nil {
@@ -75,6 +78,7 @@ func init() {
 }
 
 func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
+	flag.Parse()
 	defer clientsManager.CloseAll()
 	err := eventsingest.Initialize(natsURL, "clientif_events")
 	if err != nil {
@@ -82,7 +86,12 @@ func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
 	}
 	defer eventsingest.Close()
 
-	http.HandleFunc("/initiate/{protocol}/{userID}", initiateHandler)
+	// CORS header allows the React frontend (running on a different port or host)
+	// to open the WebSocket signaling connection without a preflight rejection.
+	http.HandleFunc("/initiate/{protocol}/{userID}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		initiateHandler(w, r)
+	})
 	go func() {
 		slog.Info("Starting server on :9999")
 		if err := http.ListenAndServe(":9999", nil); err != nil {

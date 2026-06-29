@@ -71,8 +71,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        SERVICE_NAME: scheduler
-    command: ["./service", "--compute-addr=${COMPUTE_ADDR:-10.42.0.229:9997}"]
+        SERVICE_NAME: scheduler2
     network_mode: host
     # ports:
     #   - "9998:9998"

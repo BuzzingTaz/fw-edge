@@ -25,6 +25,7 @@ type Client struct {
 	DataChannel              *webrtc.DataChannel
 	SchedulerListenerHandler func(ProcessedDataMessage)
 	Mutex                    sync.Mutex
+	SchedulerURL             string
 }
 
 // TODO: Move these to a separate signaling.go file
@@ -168,14 +169,18 @@ func (client *Client) ListenWebRTCSignalHandler() {
 }
 
 func (client *Client) ConnectScheduler() error {
-	schedulerConn, _, err := websocket.DefaultDialer.Dial("ws://localhost:9998/ws/"+client.UserID, nil)
+	url := client.SchedulerURL
+	if url == "" {
+		url = "ws://localhost:9998"
+	}
+	schedulerConn, _, err := websocket.DefaultDialer.Dial(url+"/ws/"+client.UserID, nil)
 	if err != nil {
 		return err
 	}
 	client.Mutex.Lock()
 	client.SchedulerConn = schedulerConn
 	client.Mutex.Unlock()
-	slog.Info("Connected to scheduler WebSocket", "userID", client.UserID)
+	slog.Info("Connected to scheduler WebSocket", "userID", client.UserID, "url", url)
 	return nil
 }
 
