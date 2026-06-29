@@ -13,9 +13,8 @@ import proto.fw_pb2 as fw_pb2
 SOCKET_PATH = "/tmp/edge_compute_inference.sock"
 MODEL_PATH = "yolo26n.engine"
 
-# Matches Go sendEncodedFrameToPython:
-# [packet_timestamp u32 BE][data_len u32 BE][codec u8][encoded frame bytes]
-FRAME_HEADER = struct.Struct("!IIB")
+U16_STRUCT = struct.Struct("!H")  # 2 bytes for Task ID length
+U32_STRUCT = struct.Struct("!I")  # 4 bytes for Frame Data length
 
 CODEC_NAME = {
     0: "unknown",
@@ -56,6 +55,7 @@ class VideoDecoder:
 
         return None
 
+
 def recvall(sock: socket.socket, n: int) -> bytearray:
     """Helper to read exactly n bytes from a stream socket."""
     data = bytearray()
@@ -66,23 +66,39 @@ def recvall(sock: socket.socket, n: int) -> bytearray:
         data.extend(packet)
     return data
 
+
 def uds_reader(conn: socket.socket, frame_queue: queue.Queue):
-    """Continuously reads framed video packets and pushes them to a queue."""
+    """Reads variable-length string framed packages off the streaming UDS pipe."""
     try:
         while True:
-            header_data = recvall(conn, FRAME_HEADER.size)
-            if not header_data:
+            task_id_len_data = recvall(conn, 2)
+            if not task_id_len_data:
                 break
+            task_id_len = U16_STRUCT.unpack(task_id_len_data)[0]
 
-            packet_timestamp, data_len, codec_id = FRAME_HEADER.unpack_from(header_data)
+            task_id_bytes = recvall(conn, task_id_len)
+            if not task_id_bytes:
+                break
+            task_id = task_id_bytes.decode('utf-8')
+
+            codec_data = recvall(conn, 1)
+            if not codec_data:
+                break
+            codec_id = codec_data[0]
+
+            data_len_data = recvall(conn, 4)
+            if not data_len_data:
+                break
+            data_len = U32_STRUCT.unpack(data_len_data)[0]
 
             encoded_data = recvall(conn, data_len)
             if not encoded_data:
                 break
 
-            frame_queue.put((packet_timestamp, codec_id, encoded_data))
+            # Send extracted items into processing queue
+            frame_queue.put((task_id, codec_id, encoded_data))
     except Exception as e:
-        print(f"Reader thread terminated: {e}")
+        print(f"UDS Reader exception encountered: {e}")
     finally:
         frame_queue.put(None)  # Sentinel to stop inference thread
 
@@ -93,7 +109,8 @@ def handle_client(conn: socket.socket, model: YOLO):
     frame_queue = queue.Queue(maxsize=30)
     decoder = VideoDecoder()
 
-    reader_thread = threading.Thread(target=uds_reader, args=(conn, frame_queue), daemon=True)
+    reader_thread = threading.Thread(
+        target=uds_reader, args=(conn, frame_queue), daemon=True)
     reader_thread.start()
 
     try:
@@ -102,7 +119,7 @@ def handle_client(conn: socket.socket, model: YOLO):
             if item is None:
                 break  # Client disconnected
 
-            packet_timestamp, codec_id, encoded_data = item
+            task_id, codec_id, encoded_data = item
 
             try:
                 decoder.configure(codec_id)
@@ -126,7 +143,8 @@ def handle_client(conn: socket.socket, model: YOLO):
                     for i in range(len(xywh)):
                         c_id = int(cls_ids[i].item())
                         if hasattr(model, "names") and isinstance(model.names, dict):
-                            c_name = str(model.names.get(c_id, f"Class_{c_id}"))
+                            c_name = str(model.names.get(
+                                c_id, f"Class_{c_id}"))
                         else:
                             c_name = str(c_id)
 
@@ -143,12 +161,11 @@ def handle_client(conn: socket.socket, model: YOLO):
 
             # Serialize and pack length-prefixed inference result
             result_msg = fw_pb2.InferenceResult(
-                timestamp=int(packet_timestamp),
+                task_id=task_id,
                 detections=grpc_boxes
             )
             serialized = result_msg.SerializeToString()
             conn.sendall(struct.pack("!I", len(serialized)) + serialized)
-
     except Exception as e:
         print(f"Error handling UDS client: {e}")
         traceback.print_exc()
@@ -172,7 +189,8 @@ def run():
     try:
         while True:
             conn, _ = server.accept()
-            threading.Thread(target=handle_client, args=(conn, trt_model), daemon=True).start()
+            threading.Thread(target=handle_client, args=(
+                conn, trt_model), daemon=True).start()
     except KeyboardInterrupt:
         print("Shutting down cleanly.")
     finally:

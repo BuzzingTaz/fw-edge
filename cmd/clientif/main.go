@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -47,18 +46,14 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client.SchedulerListenerHandler = func(message clientif.ProcessedDataMessage) {
-		taskID := tsToTaskIDMap[message.Timestamp]
-		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{
-			"timestamp": strconv.FormatUint(message.Timestamp, 10),
-		})
-		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "Frame Timestamp", message.Timestamp)
+		taskID := message.TaskId
+		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{})
+		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "taskID", message.TaskId)
 
 		if err := clientif.SendDataToClient(client, message); err != nil {
 			slog.Error("Failed to send inference data over WebRTC data channel", "error", err)
 		}
-		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_sent", map[string]string{
-			"timestamp": strconv.FormatUint(message.Timestamp, 10),
-		})
+		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_sent", map[string]string{})
 	}
 	go client.ListenScheduler()
 

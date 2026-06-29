@@ -25,7 +25,7 @@ type VideoStreamerServiceServer struct {
 }
 
 // StreamVideo handles bidirectional streaming of video frames and inference results between the client and the scheduler engine.
-func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer[pb.StreamVideoRequest, pb.InferenceResult]) error {
+func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer[pb.EncodedFrame, pb.InferenceResult]) error {
 	slog.Info("StreamVideo called")
 
 	ctx, cancel := context.WithTimeout(stream.Context(), 300*time.Second)
@@ -74,24 +74,17 @@ func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer
 			return err
 		}
 
-		switch payload := in.Payload.(type) {
-		case *pb.StreamVideoRequest_Metadata:
-			slog.Debug("StreamVideo: received metadata properties", "client_id", payload.Metadata.GetClientId(), "track_id", payload.Metadata.GetTrackId())
-		case *pb.StreamVideoRequest_EncodedFrame:
-			// Push to queue immediately. Loop stays open to continue execution.
-			select {
-			case frameChan <- payload.EncodedFrame:
-			default:
-				slog.Warn("Scheduler frame channel buffer saturated. Dropping frame packet to prevent pipeline lock.")
-			}
+		// Push to queue immediately. Loop stays open to continue execution.
+		select {
+		case frameChan <- in:
 		default:
-			slog.Warn("StreamVideo: unrecognized payload signature specification received")
+			slog.Warn("Scheduler frame channel buffer saturated. Dropping frame packet to prevent pipeline lock.")
 		}
 	}
 }
 
 func ReadInferenceData(
-	clientStream grpc.BidiStreamingServer[pb.StreamVideoRequest, pb.InferenceResult],
+	clientStream grpc.BidiStreamingServer[pb.EncodedFrame, pb.InferenceResult],
 	computeStream grpc.BidiStreamingClient[pb.EncodedFrame, pb.InferenceResult],
 ) {
 	for {
@@ -105,13 +98,13 @@ func ReadInferenceData(
 			return
 		}
 
-		slog.Info("Received inference results", "timestamp", inferenceData.Timestamp, "processingStatus", inferenceData.ProcessingStatus, "detections", len(inferenceData.Detections))
+		slog.Debug("Received inference results", "taskId", inferenceData.TaskId, "processingStatus", inferenceData.ProcessingStatus, "detections", len(inferenceData.Detections))
 
 		if err := clientStream.Send(inferenceData); err != nil {
 			slog.Error("Error sending inference data to client", "err", err)
 			return
 		}
-		slog.Debug("Sent inference data back to client for frame", "timestamp", inferenceData.Timestamp)
+		slog.Debug("Sent inference data back to client for frame", "taskId", inferenceData.TaskId)
 	}
 }
 

@@ -25,7 +25,7 @@ type Client struct {
 	Protocol                 string
 	ClientConn               *websocket.Conn
 	SchedulerGRPCConn        *grpc.ClientConn
-	SchedulerStream          grpc.BidiStreamingClient[pb.StreamVideoRequest, pb.InferenceResult]
+	SchedulerStream          grpc.BidiStreamingClient[pb.EncodedFrame, pb.InferenceResult]
 	PeerConnection           *webrtc.PeerConnection
 	DataChannel              *webrtc.DataChannel
 	SchedulerListenerHandler func(ProcessedDataMessage)
@@ -46,7 +46,7 @@ type ClientWsMessage struct {
 // temporary
 // TODO: ew, change this to grpc protobuf (that's the whole point of grpc, right?)
 type ProcessedDataMessage struct {
-	Timestamp        uint64 `json:"timestamp"`
+	TaskId           string `json:"task_id"`
 	ProcessingStatus int    `json:"processing_status"`
 	Detections       []struct {
 		X          int     `json:"x"`
@@ -232,7 +232,7 @@ func (client *Client) ListenScheduler() {
 		}
 
 		message := ProcessedDataMessage{
-			Timestamp:        result.GetTimestamp(),
+			TaskId:           result.GetTaskId(),
 			ProcessingStatus: int(result.GetProcessingStatus()),
 		}
 		for _, detection := range result.GetDetections() {

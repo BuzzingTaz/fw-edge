@@ -125,19 +125,6 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 		}
 		sampleBuilder := samplebuilder.New(250, depacketizer, codec.ClockRate)
 
-		if err := client.SchedulerStream.Send(&pb.StreamVideoRequest{
-			Payload: &pb.StreamVideoRequest_Metadata{
-				Metadata: &pb.Metadata{
-					ClientId: client.UserID,
-					TrackId:  track.ID(),
-					MimeType: codec.MimeType,
-				},
-			},
-		}); err != nil {
-			slog.Error("Failed to send stream metadata to scheduler", "error", err)
-			return
-		}
-
 		// Loop here is fine since it's a separate goroutine
 		for {
 			rtpPacket, _, readErr := track.ReadRTP()
@@ -152,7 +139,7 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 				timestamp := uint64(sample.PacketTimestamp)
 				taskID, ok := tsToTaskIDMap[timestamp]
 				if !ok {
-					slog.Info("Encoded frame with new timestamp received, adding to map", "timestamp", timestamp)
+					slog.Debug("Encoded frame with new timestamp received, adding to map", "timestamp", timestamp)
 					taskID = uuid.New().String()
 					tsToTaskIDMap[timestamp] = taskID
 					eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_new_frame_received", map[string]string{
@@ -168,15 +155,10 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 
 				encodedFrame := &pb.EncodedFrame{
 					Data:     sampleBytes,
-					TrackId:  track.ID(),
-					Ssrc:     uint32(track.SSRC()),
+					TaskId:   taskID,
 					MimeType: codec.MimeType,
 				}
-				if err := client.SchedulerStream.Send(&pb.StreamVideoRequest{
-					Payload: &pb.StreamVideoRequest_EncodedFrame{
-						EncodedFrame: encodedFrame,
-					},
-				}); err != nil {
+				if err := client.SchedulerStream.Send(encodedFrame); err != nil {
 					slog.Error("Failed to send encoded frame to scheduler", "error", err)
 					return
 				}

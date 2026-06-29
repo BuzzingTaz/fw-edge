@@ -48,14 +48,23 @@ func codecIDFromMimeType(mimeType string) uint8 {
 	}
 }
 
-// sendEncodedFrameToUDS writes length-prefixed frame data to the Unix socket
-func sendEncodedFrameToUDS(conn net.Conn, packetTimestamp uint32, codecID uint8, encodedData []byte) error {
-	// [packet_timestamp u32 BE][data_len u32 BE][codec u8][encoded frame bytes]
-	buf := make([]byte, 9+len(encodedData))
-	binary.BigEndian.PutUint32(buf[0:4], packetTimestamp)
-	binary.BigEndian.PutUint32(buf[4:8], uint32(len(encodedData)))
-	buf[8] = codecID
-	copy(buf[9:], encodedData)
+// sendEncodedFrameToUDS writes dynamic length-prefixed variables to the Unix socket
+func sendEncodedFrameToUDS(conn net.Conn, taskID string, codecID uint8, encodedData []byte) error {
+	taskIDBytes := []byte(taskID)
+	taskIDLen := len(taskIDBytes)
+	dataLen := len(encodedData)
+
+	// Allocate buffer: 2 (taskID len) + taskID strings + 1 (codec) + 4 (data len) + frame bytes
+	buf := make([]byte, 2+taskIDLen+1+4+dataLen)
+
+	binary.BigEndian.PutUint16(buf[0:2], uint16(taskIDLen))
+	copy(buf[2:2+taskIDLen], taskIDBytes)
+
+	buf[2+taskIDLen] = codecID
+
+	binary.BigEndian.PutUint32(buf[3+taskIDLen:7+taskIDLen], uint32(dataLen))
+	copy(buf[7+taskIDLen:], encodedData)
+
 	_, err := conn.Write(buf)
 	return err
 }
@@ -128,10 +137,16 @@ func (*computeStreamServer) StreamEncodedFrames(stream grpc.BidiStreamingServer[
 				continue
 			}
 
-			log.Printf("EncodedFrame received, packet_timestamp=%d track_id=%s mime_type=%s frame_size=%d",
-				sample.PacketTimestamp, encodedFrame.GetTrackId(), encodedFrame.GetMimeType(), len(sample.Data))
+			log.Printf("EncodedFrame received, packet_timestamp=%d taskID=%s mime_type=%s frame_size=%d",
+				sample.PacketTimestamp, encodedFrame.GetTaskId(), encodedFrame.GetMimeType(), len(sample.Data))
 
-			if err := sendEncodedFrameToUDS(conn, sample.PacketTimestamp, codecIDFromMimeType(encodedFrame.GetMimeType()), sample.Data); err != nil {
+			err = sendEncodedFrameToUDS(
+				conn,
+				encodedFrame.GetTaskId(),
+				codecIDFromMimeType(encodedFrame.GetMimeType()),
+				sample.Data)
+
+			if err != nil {
 				log.Printf("Error forwarding encoded frame to Python: %v", err)
 				errChan <- err
 				return

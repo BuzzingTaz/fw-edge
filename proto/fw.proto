@@ -27,7 +27,7 @@ message DecodedFrame {
 }
 
 message InferenceResult {
-  uint64 timestamp = 1;
+  string task_id = 1;
   uint64 processing_status = 2;
   repeated BoundingBox detections = 3;
 }
@@ -51,7 +51,7 @@ message RTPPacket {
 }
 
 service VideoStreamService {
-  rpc StreamVideo(stream StreamVideoRequest) returns (stream InferenceResult);
+  rpc StreamVideo(stream EncodedFrame) returns (stream InferenceResult);
 }
 
 message EncodedFrame {
@@ -59,9 +59,8 @@ message EncodedFrame {
   bytes data = 1;
 
   // Optional metadata for easy routing/logging on the server side
-  string track_id = 2;
-  uint32 ssrc = 3;
-  string mime_type = 4;
+  string task_id = 2;
+  string mime_type = 3;
 }
 
 message MediaSample {
@@ -71,19 +70,6 @@ message MediaSample {
   uint32 packet_timestamp = 4;
   uint32 prev_dropped_packets = 5;
   bytes metadata = 6;
-}
-
-message Metadata {
-  string track_id = 1;
-  string client_id = 2;
-  string mime_type = 3;
-}
-
-message StreamVideoRequest {
-  oneof payload {
-    Metadata metadata = 1;
-    EncodedFrame encoded_frame = 2;
-  }
 }
 
 message StreamSummary {
