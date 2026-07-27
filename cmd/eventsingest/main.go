@@ -99,7 +99,10 @@ func main() {
 		slog.Error("Failed to subscribe", "err", err)
 	}
 
+	setupHTTPServer()
+
 	slog.Info("Measurements Ingest Server Started. Waiting for events...")
+
 
 	ticker := time.NewTicker(FlushInterval)
 	defer ticker.Stop()

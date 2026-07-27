@@ -110,3 +110,59 @@ func (m *DBManager) InsertMeasureEvents(ctx context.Context, events []*pb.Measur
 
 	return nil
 }
+
+// DumpEventsCSV writes all measurement events for a given userID to a CSV writer.
+func (m *DBManager) DumpEventsCSV(ctx context.Context, userID string, w func([]string) error) error {
+	query := `
+		SELECT meas_time, task_id, event_type, service_name, payload
+		FROM measurement_events
+		WHERE task_id IN (
+			SELECT task_id FROM measurement_events WHERE user_id = $1
+		)
+		ORDER BY task_id, meas_time
+	`
+	rows, err := m.pool.Query(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to query events: %w", err)
+	}
+	defer rows.Close()
+
+	// Write CSV Header
+	if err := w([]string{"meas_time", "task_id", "event_type", "service_name", "payload"}); err != nil {
+		return err
+	}
+
+	for rows.Next() {
+		var measTime time.Time
+		var taskID, eventType, serviceName string
+		var payload *string
+
+		if err := rows.Scan(&measTime, &taskID, &eventType, &serviceName, &payload); err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		var payloadStr string
+		if payload != nil {
+			payloadStr = *payload
+		}
+
+		record := []string{
+			measTime.Format(time.RFC3339Nano),
+			taskID,
+			eventType,
+			serviceName,
+			payloadStr,
+		}
+		if err := w(record); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
+}
+
+// ClearEvents truncates the measurement_events table.
+func (m *DBManager) ClearEvents(ctx context.Context) error {
+	_, err := m.pool.Exec(ctx, "TRUNCATE TABLE measurement_events")
+	return err
+}
