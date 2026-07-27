@@ -9,6 +9,7 @@ from ultralytics import YOLO
 
 import proto.fw_pb2 as fw_pb2
 import proto.fw_pb2_grpc as fw_pb2_grpc
+from telemetry_client import telemetry
 
 GRPC_PORT = "[::]:9997"
 MODEL_PATH = "yolo26n.engine"
@@ -69,6 +70,8 @@ class ComputeStreamServicer(fw_pb2_grpc.ComputeStreamServicer):
                 task_id = encoded_frame.task_id
                 mime_type = encoded_frame.mime_type
 
+                telemetry.transmit_measure_event("compute2_frame_received", task_id)
+
                 try:
                     sample = fw_pb2.MediaSample.FromString(encoded_frame.data)
                 except Exception as e:
@@ -89,8 +92,12 @@ class ComputeStreamServicer(fw_pb2_grpc.ComputeStreamServicer):
                         print(f"Decode skipped ({decoder.codec_name}, task_id={task_id})")
                     continue
 
+                telemetry.transmit_measure_event("compute2_frame_decoded", task_id)
+
                 with self.inference_lock:
                     results = self.model(frame, stream=True, conf=0.5, verbose=False)
+
+                telemetry.transmit_measure_event("compute2_inference_complete", task_id)
 
                 grpc_boxes = []
                 for r in results:
@@ -118,11 +125,13 @@ class ComputeStreamServicer(fw_pb2_grpc.ComputeStreamServicer):
                                 )
                             )
 
-                yield fw_pb2.InferenceResult(
+                result = fw_pb2.InferenceResult(
                     task_id=task_id,
                     processing_status=0,
                     detections=grpc_boxes
                 )
+                telemetry.transmit_measure_event("compute2_result_yielded", task_id)
+                yield result
 
         except grpc.RpcError as e:
             print(f"gRPC stream abruptly disconnected: {e.code()}")

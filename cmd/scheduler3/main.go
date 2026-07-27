@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -56,6 +57,7 @@ func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer
 					slog.Error("Error forwarding encoded frame down to compute layer", "err", err)
 					return
 				}
+				eventsingest.TransmitMeasureEvent(time.Now(), "", frame.TaskId, "scheduler3_frame_sent_compute", map[string]string{})
 			}
 		}
 	}()
@@ -73,6 +75,8 @@ func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer
 			close(frameChan)
 			return err
 		}
+
+		eventsingest.TransmitMeasureEvent(time.Now(), "", in.TaskId, "scheduler3_frame_received", map[string]string{})
 
 		// Push to queue immediately. Loop stays open to continue execution.
 		select {
@@ -98,12 +102,16 @@ func ReadInferenceData(
 			return
 		}
 
+		eventsingest.TransmitMeasureEvent(time.Now(), "", inferenceData.TaskId, "scheduler3_result_received_compute", map[string]string{})
+
 		slog.Debug("Received inference results", "taskId", inferenceData.TaskId, "processingStatus", inferenceData.ProcessingStatus, "detections", len(inferenceData.Detections))
 
 		if err := clientStream.Send(inferenceData); err != nil {
 			slog.Error("Error sending inference data to client", "err", err)
 			return
 		}
+
+		eventsingest.TransmitMeasureEvent(time.Now(), "", inferenceData.TaskId, "scheduler3_result_sent", map[string]string{})
 		slog.Debug("Sent inference data back to client for frame", "taskId", inferenceData.TaskId)
 	}
 }
@@ -130,6 +138,12 @@ func startClientifGRPCServer() {
 
 func main() {
 	flag.Parse()
+
+	err := eventsingest.Initialize("nats://localhost:4222", "scheduler3")
+	if err != nil {
+		slog.Warn("Failed to init events ingest client, telemetry will not be tracked", "err", err)
+	}
+	defer eventsingest.Close()
 
 	go startClientifGRPCServer()
 
