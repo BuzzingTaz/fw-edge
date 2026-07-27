@@ -40,5 +40,6 @@ go.work
 *.pb.go
 *.pb.gw.go
 
-data/
-nats-data/
+results/
+rt_data/
+

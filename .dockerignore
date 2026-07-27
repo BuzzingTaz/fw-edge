@@ -1,5 +1,4 @@
-data/
-nats-data/
+rt_data/
 nats.conf
 proto/*.pb.go
 .git/

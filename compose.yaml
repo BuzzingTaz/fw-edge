@@ -14,7 +14,7 @@ services:
       - db_user
       - db_password
     volumes:
-      - ./data:/pgdata
+      - ./rt_data/pgdata:/pgdata
 
   nats:
     image: nats:alpine
@@ -25,7 +25,7 @@ services:
       - "8222:8222" # HTTP management/monitoring dashboard
     volumes:
       - ./nats.conf:/etc/nats/nats.conf:ro
-      - ./nats-data:/data
+      - ./rt_data/nats-data:/data
     command: ["-c", "/etc/nats/nats.conf"]
     restart: unless-stopped
     # TODO: Implement healthcheck to make sure nats is listening before dependent services start
@@ -46,6 +46,8 @@ services:
     secrets:
       - db_user
       - db_password
+    volumes:
+      - ./results:/benchmarks
     depends_on:
       - db
       - nats
@@ -75,6 +77,19 @@ services:
     #   - "9998:9998"
     depends_on:
       - eventsingest
+
+  metrics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: metrics
+    container_name: metrics_processor
+    hostname: metrics
+    ports:
+      - "8889:8889"
+    volumes:
+      - ./results:/benchmarks
 
 secrets:
   db_user:
