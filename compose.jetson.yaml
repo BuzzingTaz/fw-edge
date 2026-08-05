@@ -1,0 +1,27 @@
+services:
+  compute2:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    image: fw-edge-jetson:latest
+    container_name: compute2_grpc
+    runtime: nvidia
+    ipc: host
+    ports:
+      - "9997:9997"
+    volumes:
+      - ./:/app
+    command: ["python3", "cmd/compute2/main.py"]
+    restart: unless-stopped
+
+  compute3:
+    image: fw-edge-jetson:latest
+    container_name: compute3_mqtt
+    runtime: nvidia
+    ipc: host
+    volumes:
+      - ./:/app
+    command: ["python3", "cmd/compute3/main.py"]
+    restart: unless-stopped
+    depends_on:
+      - compute2 # Depends on compute2 so it uses the same built image
