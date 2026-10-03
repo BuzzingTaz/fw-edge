@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Central NATS Broker for Command & Control (C2)
   central_nats:
@@ -12,7 +10,7 @@ services:
 
   # The Global Central Engine
   engine:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
       args:
@@ -20,7 +18,7 @@ services:
     container_name: fw-engine
     environment:
       - NATS_URL=nats://central_nats:4222
-    command: ["/app/engine", "-nats-url", "nats://central_nats:4222"]
+    command: ["./service", "-nats-url", "nats://central_nats:4222"]
     depends_on:
       - central_nats
     restart: unless-stopped

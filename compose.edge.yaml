@@ -1,18 +1,16 @@
-version: '3.8'
-
 services:
   # Base components for ALL edge nodes
   edge_actor:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
       args:
         SERVICE_NAME: edge_actor
     container_name: fw-edge-actor
     environment:
-      - NATS_URL=nats://<CENTRAL_ENGINE_IP>:4222 # Replace with actual Engine IP
+      - NATS_URL=nats://10.42.0.1:4222 # Engine NATS url
       - NODE_ID=${NODE_ID:-} # Optional, defaults to hostname
-    command: ["/app/edge_actor"]
+    command: ["./service", "-nats-url", "nats://10.42.0.1:4222"]
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Needed to spin up apps
@@ -25,9 +23,9 @@ services:
         SERVICE_NAME: resource_monitor
     container_name: fw-resource-monitor
     environment:
-      - NATS_URL=nats://<MAIN_EDGE_NODE_IP>:4222 # Replace with actual Edge NATS IP
+      - NATS_URL=nats://10.42.0.229:4222 # Within edge NATS url
       - NODE_ID=${NODE_ID:-}
-    command: ["/app/resource_monitor"]
+    command: ["./service", "-nats-url", "nats://edge_nats:4222"]
     restart: unless-stopped
     privileged: true
     volumes:
@@ -53,8 +51,8 @@ services:
     container_name: fw-edge-ingest
     environment:
       - EDGE_NATS_URL=nats://edge_nats:4222
-      - CENTRAL_NATS_URL=nats://<CENTRAL_ENGINE_IP>:4222
-    command: ["/app/edge_ingest", "-edge-nats-url", "nats://edge_nats:4222", "-central-nats-url", "nats://<CENTRAL_ENGINE_IP>:4222", "-db-path", "/data/telemetry.db"]
+      - CENTRAL_NATS_URL=nats://10.42.0.1:4222
+    command: ["./service", "-edge-nats-url", "nats://edge_nats:4222", "-central-nats-url", "nats://10.42.0.1:4222", "-db-path", "/data/telemetry.db"]
     volumes:
       - ./rt_data/sqlite:/data
     profiles: ["main"]

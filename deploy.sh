@@ -28,21 +28,30 @@ elif [ "$TARGET" = "jetson" ]; then
     # We only sync necessary files for the Jetson runtime, preserving directory structure
     rsync -avz --temp-dir=/tmp/ \
         --include='cmd/' \
+        --include='cmd/***' \
+        --include='internal/***' \
+        --include='pkg/***' \
+        --include='go.mod' \
+        --include='go.sum' \
+        --include='*.go' \
         --include='cmd/compute2/***' \
         --include='cmd/compute3/***' \
         --include='proto/***' \
         --include='Dockerfile.jetson' \
+        --include='Dockerfile' \
+        --include='scripts/***' \
         --include='compose.jetson.yaml' \
         --include='yolo*.engine' \
         --include='yolo*.pt' \
+        --include='*.yaml' \
         --exclude='*' \
         "$PROJECT_ROOT/" "$JETSON_HOST:$REMOTE_DIR"
 
-    echo "Step 3: Deploying on Jetson..."
-    # Build the image and start the compose stack
-    ssh -t $JETSON_HOST "cd $REMOTE_DIR && docker compose -f compose.jetson.yaml up -d --build compute2"
-
-    echo "Deployment to Jetson complete."
+    # echo "Step 3: Deploying on Jetson..."
+    # # Build the image and start the compose stack
+    # ssh -t $JETSON_HOST "cd $REMOTE_DIR && docker compose -f compose.jetson.yaml up -d --build compute2"
+    #
+    # echo "Deployment to Jetson complete."
 else
     echo "Invalid target: $TARGET"
     echo "Usage: ./deploy.sh [host|jetson]"
