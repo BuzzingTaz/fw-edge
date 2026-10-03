@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  # Central NATS Broker for Command & Control (C2)
+  central_nats:
+    image: nats:latest
+    container_name: fw-central-nats
+    ports:
+      - "4222:4222" # Client connections
+      - "8222:8222" # HTTP management
+    command: ["-js"] # Enable JetStream if needed later
+
+  # The Global Central Engine
+  engine:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: engine
+    container_name: fw-engine
+    environment:
+      - NATS_URL=nats://central_nats:4222
+    command: ["/app/engine", "-nats-url", "nats://central_nats:4222"]
+    depends_on:
+      - central_nats
+    restart: unless-stopped

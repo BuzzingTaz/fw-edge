@@ -2,7 +2,7 @@
 # Copies sources to a go container, builds the binary, and then copies it to a minimal alpine image for execution.
 
 # --- Build Stage ---
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ COPY proto/ ./proto/
 RUN protoc \
     --go_out=. --go_opt=paths=source_relative \
     --go-grpc_out=. --go-grpc_opt=paths=source_relative \
-    ./proto/fw.proto
+    ./proto/fw.proto ./proto/engine.proto
 
 # Copy the shared internal packages and the cmd directory
 COPY internal/ ./internal/
@@ -33,8 +33,11 @@ COPY pkg/ ./pkg/
 # Pass the name of the service we want to build
 ARG SERVICE_NAME
 
-# Build the specific binary statically
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/service ./cmd/${SERVICE_NAME}
+# Install gcc and musl-dev for CGO (required by go-sqlite3)
+RUN apk --no-cache add build-base
+
+# Build the specific binary statically (CGO needed for sqlite)
+RUN CGO_ENABLED=1 GOOS=linux go build -o /bin/service ./cmd/${SERVICE_NAME}
 
 # --- Run Stage ---
 FROM alpine:latest

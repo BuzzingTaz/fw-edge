@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+option go_package = "github.com/BuzzingTaz/fw-edge-apps/proto";
+
+package fwproto;
+
+// Command sent from Central Engine to Edge Actor
+message NodeCommand {
+    enum Type {
+        START_APP = 0;
+        STOP_APP = 1;
+    }
+    Type type = 1;
+    string app_id = 2; // e.g., "yolo-bench-1"
+    
+    // Optional payload (could be useful later for passing env vars, etc.)
+    map<string, string> config = 3;
+}
+
+// Registration message sent from Edge Actor to Central Engine
+message RegisterNodeRequest {
+    string node_id = 1;
+    string hostname = 2;
+    // We can add capabilities here later
+}
+
+// Acknowledgment from Central Engine
+message RegisterNodeResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// Status update from Edge Actor to Central Engine
+message NodeStatus {
+    string node_id = 1;
+    repeated string active_apps = 2;
+}
+
+// Resource metrics published by Edge Resource Monitor
+message ResourceMetrics {
+    string node_id = 1;
+    float cpu_percent = 2;
+    float memory_percent = 3;
+    float gpu_percent = 4; // if applicable
+}
