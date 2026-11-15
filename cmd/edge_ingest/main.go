@@ -6,11 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
-	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/BuzzingTaz/fw-edge-apps/internal/storage"
+	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -31,6 +32,9 @@ type EdgeIngestServer struct {
 	edgeNC    *nats.Conn
 	centralNC *nats.Conn
 	store     storage.TelemetryStorage
+
+	mu    sync.Mutex
+	batch []*pb.MeasureEvent
 }
 
 func init() {
@@ -98,6 +102,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	server.setupHTTPServer()
 	slog.Info("Edge Ingest Server Started. Waiting for events...")
 
 	ticker := time.NewTicker(FlushInterval)
@@ -110,22 +115,13 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var currentBatch []*pb.MeasureEvent
-
 	for {
 		select {
 		case event := <-eventChan:
-			currentBatch = append(currentBatch, event)
-			if len(currentBatch) >= MaxBatchSize {
-				server.flushBatch(ctx, currentBatch)
-				currentBatch = nil
-			}
+			server.enqueue(ctx, event)
 
 		case <-ticker.C:
-			if len(currentBatch) > 0 {
-				server.flushBatch(ctx, currentBatch)
-				currentBatch = nil
-			}
+			server.flushPending(ctx)
 
 		case <-summaryTicker.C:
 			// In a real scenario, this would aggregate data from SQLite and push via centralNC
@@ -136,12 +132,31 @@ func main() {
 
 		case <-sigCtx.Done():
 			slog.Info("Shutting down Edge Ingest, flushing remaining events...")
-			if len(currentBatch) > 0 {
-				server.flushBatch(ctx, currentBatch)
-			}
+			server.flushPending(ctx)
 			return
 		}
 	}
+}
+
+func (s *EdgeIngestServer) enqueue(ctx context.Context, event *pb.MeasureEvent) {
+	s.mu.Lock()
+	s.batch = append(s.batch, event)
+	full := len(s.batch) >= MaxBatchSize
+	s.mu.Unlock()
+	if full {
+		s.flushPending(ctx)
+	}
+}
+
+func (s *EdgeIngestServer) flushPending(ctx context.Context) {
+	s.mu.Lock()
+	batch := s.batch
+	s.batch = nil
+	s.mu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	s.flushBatch(ctx, batch)
 }
 
 func (s *EdgeIngestServer) flushBatch(ctx context.Context, batch []*pb.MeasureEvent) {

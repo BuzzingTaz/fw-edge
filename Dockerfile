@@ -6,6 +6,9 @@ FROM golang:1.27-alpine AS builder
 
 WORKDIR /app
 
+# Install gcc and musl-dev for CGO (required by go-sqlite3)
+RUN apk --no-cache add build-base
+
 # Install the protobuf compiler, go protobuf and grpc plugins
 RUN apk --no-cache add protobuf protobuf-dev
 
@@ -28,20 +31,16 @@ RUN protoc \
 # Copy the shared internal packages and the cmd directory
 COPY internal/ ./internal/
 COPY cmd/ ./cmd/
-COPY pkg/ ./pkg/
 
 # Pass the name of the service we want to build
 ARG SERVICE_NAME
-
-# Install gcc and musl-dev for CGO (required by go-sqlite3)
-RUN apk --no-cache add build-base
 
 # Build the specific binary statically (CGO needed for sqlite)
 RUN CGO_ENABLED=1 GOOS=linux go build -o /bin/service ./cmd/${SERVICE_NAME}
 
 # --- Run Stage ---
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates docker-cli docker-cli-compose
 
 WORKDIR /root/
 

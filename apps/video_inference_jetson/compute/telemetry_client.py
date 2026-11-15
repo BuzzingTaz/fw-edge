@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 import time
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -11,7 +12,9 @@ except ImportError:
     print("Warning: nats-py is not installed. Telemetry will be disabled. Install with `pip install nats-py`")
 
 class TelemetryClient:
-    def __init__(self, nats_url="nats://10.119.207.216:4222", service_name="compute2"):
+    def __init__(self, nats_url=None, service_name="compute2"):
+        if nats_url is None:
+            nats_url = os.environ.get("EDGE_NATS_URL", "nats://127.0.0.1:4223")
         self.nats_url = nats_url
         self.service_name = service_name
         self.loop = asyncio.new_event_loop()

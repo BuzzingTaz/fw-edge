@@ -64,7 +64,7 @@ func NewEventsClient(natsURL, serviceName string) (*Client, error) {
 		nats.Name(fmt.Sprintf("%s_EventsClient", serviceName)),
 		nats.RetryOnFailedConnect(true),
 		nats.ReconnectWait(2*time.Second),
-		nats.MaxReconnects(2),
+		nats.MaxReconnects(-1),
 
 		// Will log every time the connection drops and why
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {

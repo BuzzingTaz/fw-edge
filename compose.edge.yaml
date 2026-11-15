@@ -1,3 +1,5 @@
+name: fw-edge
+
 services:
   # Base components for ALL edge nodes
   edge_actor:
@@ -8,12 +10,14 @@ services:
         SERVICE_NAME: edge_actor
     container_name: fw-edge-actor
     environment:
-      - NATS_URL=nats://10.42.0.1:4222 # Engine NATS url
+      - NATS_URL=nats://10.42.1.100:4222 # Engine NATS url
       - NODE_ID=${NODE_ID:-} # Optional, defaults to hostname
-    command: ["./service", "-nats-url", "nats://10.42.0.1:4222"]
+      - HOST_PROJECT_DIR=${PWD}
+    command: [ "./service", "-nats-url", "nats://10.42.1.100:4222" ]
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Needed to spin up apps
+      - .:/root/fw-edge # FIXME: Narrow it down
 
   resource_monitor:
     build:
@@ -23,9 +27,9 @@ services:
         SERVICE_NAME: resource_monitor
     container_name: fw-resource-monitor
     environment:
-      - NATS_URL=nats://10.42.0.229:4222 # Within edge NATS url
+      - NATS_URL=nats://10.42.1.101:4223 # Within edge NATS url
       - NODE_ID=${NODE_ID:-}
-    command: ["./service", "-nats-url", "nats://edge_nats:4222"]
+    command: [ "./service", "-nats-url", "nats://10.42.1.101:4223" ]
     restart: unless-stopped
     privileged: true
     volumes:
@@ -38,8 +42,8 @@ services:
     image: nats:latest
     container_name: fw-edge-nats
     ports:
-      - "4222:4222"
-    profiles: ["main"]
+      - "4223:4222"
+    profiles: [ "main" ]
     restart: unless-stopped
 
   edge_ingest:
@@ -51,11 +55,14 @@ services:
     container_name: fw-edge-ingest
     environment:
       - EDGE_NATS_URL=nats://edge_nats:4222
-      - CENTRAL_NATS_URL=nats://10.42.0.1:4222
-    command: ["./service", "-edge-nats-url", "nats://edge_nats:4222", "-central-nats-url", "nats://10.42.0.1:4222", "-db-path", "/data/telemetry.db"]
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+    command: [ "./service", "-edge-nats-url", "nats://edge_nats:4222", "-central-nats-url", "nats://10.42.1.100:4222", "-db-path", "/data/telemetry.db" ]
+    ports:
+      - "8888:8888"
     volumes:
       - ./rt_data/sqlite:/data
-    profiles: ["main"]
+      - ./results:/benchmarks
+    profiles: [ "main" ]
     depends_on:
       - edge_nats
     restart: unless-stopped

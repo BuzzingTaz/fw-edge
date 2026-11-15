@@ -1,3 +1,4 @@
+# Obsolete
 services:
   db:
     image: timescale/timescaledb:latest-pg18

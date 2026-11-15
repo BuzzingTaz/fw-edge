@@ -1,14 +1,11 @@
-package main
+package metrics
 
 import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
-	"log/slog"
-	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 )
@@ -25,87 +22,22 @@ type Payload struct {
 	Timestamp string `json:"timestamp"`
 }
 
-//	var orderedEvents = []string{
-//		"clientif_new_frame_received",
-//		"scheduler3_frame_received",
-//		"scheduler3_frame_sent_compute",
-//		"compute2_frame_received",
-//		"compute2_frame_decoded",
-//		"compute2_inference_complete",
-//		"compute2_result_yielded",
-//		"scheduler3_result_received_compute",
-//		"scheduler3_result_sent",
-//		"clientif_results_reached",
-//		"clientif_results_sent",
-//	}
 var orderedEvents = []string{
 	"clientif_new_frame_received",
-	"scheduler4_frame_received",
-	"scheduler4_frame_sent_compute",
-	"compute3_frame_received",
-	"compute3_frame_decoded",
-	"compute3_inference_complete",
-	"compute3_result_yielded",
-	"scheduler4_result_received_compute",
-	"scheduler4_result_sent",
+	"scheduler3_frame_received",
+	"scheduler3_frame_sent_compute",
+	"compute2_frame_received",
+	"compute2_frame_decoded",
+	"compute2_inference_complete",
+	"compute2_result_yielded",
+	"scheduler3_result_received_compute",
+	"scheduler3_result_sent",
 	"clientif_results_reached",
 	"clientif_results_sent",
 }
 
-func main() {
-	if len(os.Args) >= 3 {
-		// CLI Mode
-		inputPath := os.Args[1]
-		outputPath := os.Args[2]
-		if err := processEdgeCSV(inputPath, outputPath); err != nil {
-			log.Fatalf("Failed to process edge CSV: %v", err)
-		}
-		fmt.Printf("Successfully processed telemetry to %s\n", outputPath)
-		return
-	}
-
-	// Server Mode
-	slog.Info("Starting metrics HTTP server on :8889")
-	http.HandleFunc("/api/process/edge", handleProcessEdge)
-	http.HandleFunc("/api/process/client", handleProcessClient)
-	if err := http.ListenAndServe(":8889", nil); err != nil {
-		slog.Error("Metrics HTTP server failed", "err", err)
-	}
-}
-
-func handleProcessEdge(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		RunID string `json:"runId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunID == "" {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
-		return
-	}
-
-	inputPath := filepath.Join("/benchmarks", req.RunID, fmt.Sprintf("edge_telemetry_%s.csv", req.RunID))
-	outputPath := filepath.Join("/benchmarks", req.RunID, fmt.Sprintf("%s_processed.csv", req.RunID))
-
-	if err := processEdgeCSV(inputPath, outputPath); err != nil {
-		slog.Error("Failed to process edge CSV", "runId", req.RunID, "err", err)
-		http.Error(w, "Failed to process edge CSV", http.StatusInternalServerError)
-		return
-	}
-
-	slog.Info("Processed edge telemetry", "runId", req.RunID, "outputPath", outputPath)
-	w.WriteHeader(http.StatusOK)
-}
-
-func handleProcessClient(w http.ResponseWriter, r *http.Request) {
-	// Stub for future client metrics processing
-	w.WriteHeader(http.StatusOK)
-}
-
-func processEdgeCSV(inputPath, outputPath string) error {
+// ProcessEdgeCSV pivots a raw edge telemetry dump into one row per completed frame.
+func ProcessEdgeCSV(inputPath, outputPath string) error {
 	file, err := os.Open(inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to open input file: %w", err)
@@ -127,7 +59,7 @@ func processEdgeCSV(inputPath, outputPath string) error {
 
 	for i, row := range records {
 		if i == 0 {
-			continue // skip header
+			continue
 		}
 		if len(row) < 5 {
 			continue
@@ -204,7 +136,7 @@ func processEdgeCSV(inputPath, outputPath string) error {
 		endEv, hasEnd := eventMap["clientif_results_sent"]
 
 		if !hasStart || !hasEnd {
-			continue // Skip if incomplete end-to-end
+			continue
 		}
 
 		timeSinceStart := startEv.MeasTime.Sub(testStartTime).Milliseconds()

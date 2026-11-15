@@ -42,6 +42,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	apiServer := engine.NewAPIServer(orchestrator)
+	go func() {
+		if err := apiServer.Start(":8080"); err != nil {
+			slog.Error("API Server failed", "err", err)
+		}
+	}()
+
 	slog.Info("Central Engine is running...")
 
 	// Block until context is done

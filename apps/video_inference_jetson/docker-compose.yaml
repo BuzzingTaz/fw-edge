@@ -1,0 +1,45 @@
+services:
+  clientif:
+    build:
+      context: ../../
+      dockerfile: apps/video_inference_jetson/clientif/Dockerfile
+      args:
+        SERVICE_NAME: clientif
+    network_mode: host
+    environment:
+      - APP_ID=video_inference_jetson
+      - COMPONENT_ID=clientif
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+      - EDGE_NATS_URL=nats://127.0.0.1:4223
+
+  scheduler:
+    build:
+      context: ../../
+      dockerfile: apps/video_inference_jetson/scheduler/Dockerfile
+      args:
+        SERVICE_NAME: scheduler
+    command: ["./scheduler", "--compute-addr=127.0.0.1:9997"]
+    network_mode: host
+    environment:
+      - APP_ID=video_inference_jetson
+      - COMPONENT_ID=scheduler
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+      - EDGE_NATS_URL=nats://127.0.0.1:4223
+
+  compute:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.jetson
+    image: fw-edge-jetson:latest
+    runtime: nvidia
+    ipc: host
+    network_mode: host
+    volumes:
+      - ${HOST_PROJECT_DIR:-/home/nvidia1/fw-edge}:/app
+    command: ["python3", "apps/video_inference_jetson/compute/main.py"]
+    restart: unless-stopped
+    environment:
+      - APP_ID=video_inference_jetson
+      - COMPONENT_ID=compute
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+      - EDGE_NATS_URL=nats://127.0.0.1:4223

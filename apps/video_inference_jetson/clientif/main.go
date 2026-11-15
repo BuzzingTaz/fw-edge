@@ -11,12 +11,16 @@ import (
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/clientif"
 	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
+	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
+	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/proto"
 )
 
 var clientsManager *clientif.ClientsManager
 var natsURL = "nats://localhost:4222"
 
 var tsToTaskIDMap = make(map[uint64]string) // TODO: Move to within each client, and make ring buffer?
+var taskIDToTsMap = make(map[string]uint64)
 
 func initiateHandler(w http.ResponseWriter, r *http.Request) {
 	protocol := r.PathValue("protocol")
@@ -47,6 +51,11 @@ func initiateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	client.SchedulerListenerHandler = func(message clientif.ProcessedDataMessage) {
 		taskID := message.TaskId
+
+		if ts, ok := taskIDToTsMap[taskID]; ok {
+			message.Timestamp = ts
+		}
+
 		eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_results_reached", map[string]string{})
 		slog.Debug("Received processed data from scheduler", "userID", client.UserID, "taskID", message.TaskId)
 
@@ -71,11 +80,52 @@ func init() {
 
 func main() { //nolint:gocognit,cyclop,gocyclo,maintidx
 	defer clientsManager.CloseAll()
-	err := eventsingest.Initialize(natsURL, "clientif_events")
+
+	appID := os.Getenv("APP_ID")
+	compID := os.Getenv("COMPONENT_ID")
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		hostname, _ := os.Hostname()
+		nodeID = hostname
+	}
+
+	centralNats := os.Getenv("CENTRAL_NATS_URL")
+	if centralNats != "" {
+		natsURL = centralNats
+	}
+	edgeNats := os.Getenv("EDGE_NATS_URL")
+	if edgeNats == "" {
+		edgeNats = "nats://127.0.0.1:4223"
+	}
+
+	err := eventsingest.Initialize(edgeNats, "clientif_events")
 	if err != nil {
 		slog.Warn("Failed to init events ingest client, telemetry will not be tracked", "err", err)
 	}
 	defer eventsingest.Close()
+
+	if appID != "" && compID != "" {
+		nc, err := nats.Connect(natsURL)
+		if err == nil {
+			req := &pb.AppRegistrationRequest{
+				AppId:       appID,
+				ComponentId: compID,
+				NodeId:      nodeID,
+			}
+			data, _ := proto.Marshal(req)
+			msg, err := nc.Request("c2.engine.app_register", data, 2*time.Second)
+			if err != nil {
+				slog.Error("Failed to register app component with Central Engine", "err", err)
+			} else {
+				var resp pb.AppRegistrationResponse
+				proto.Unmarshal(msg.Data, &resp)
+				slog.Info("App component registered with Central Engine", "success", resp.Success)
+			}
+			nc.Close()
+		} else {
+			slog.Error("Failed to connect to Central NATS for registration", "err", err)
+		}
+	}
 
 	http.HandleFunc("/initiate/{protocol}/{userID}", initiateHandler)
 	go func() {

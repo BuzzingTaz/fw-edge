@@ -142,6 +142,7 @@ func InitializeVideoTransceiver(client *clientif.Client) error {
 					slog.Debug("Encoded frame with new timestamp received, adding to map", "timestamp", timestamp)
 					taskID = uuid.New().String()
 					tsToTaskIDMap[timestamp] = taskID
+					taskIDToTsMap[taskID] = timestamp
 					eventsingest.TransmitMeasureEvent(time.Now(), client.UserID, taskID, "clientif_new_frame_received", map[string]string{
 						"timestamp": strconv.FormatUint(timestamp, 10),
 					})

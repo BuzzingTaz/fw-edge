@@ -3,8 +3,8 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
@@ -61,14 +61,14 @@ func (s *SQLiteStorage) InsertMeasureEvents(ctx context.Context, events []*pb.Me
 	defer stmt.Close()
 
 	for _, e := range events {
-		// Convert map to simple string representation for payload, or leave blank if nil.
 		var payloadStr string
-		if e.Payload != nil {
-			var parts []string
-			for k, v := range e.Payload {
-				parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+		if len(e.Payload) > 0 {
+			encoded, err := json.Marshal(e.Payload)
+			if err != nil {
+				tx.Rollback()
+				return fmt.Errorf("failed to encode payload: %w", err)
 			}
-			payloadStr = strings.Join(parts, ";")
+			payloadStr = string(encoded)
 		}
 
 		_, err := stmt.ExecContext(ctx, e.MeasTime.AsTime(), e.UserId, e.TaskId, e.EventType, e.ServiceName, payloadStr)
@@ -85,7 +85,9 @@ func (s *SQLiteStorage) DumpEventsCSV(ctx context.Context, userID string, w func
 	query := `
 		SELECT meas_time, task_id, event_type, service_name, payload
 		FROM measurement_events
-		WHERE user_id = ?
+		WHERE task_id IN (
+			SELECT task_id FROM measurement_events WHERE user_id = ?
+		)
 		ORDER BY task_id, meas_time
 	`
 	rows, err := s.db.QueryContext(ctx, query, userID)
@@ -120,6 +122,11 @@ func (s *SQLiteStorage) DumpEventsCSV(ctx context.Context, userID string, w func
 	}
 
 	return rows.Err()
+}
+
+func (s *SQLiteStorage) ClearEvents(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM measurement_events")
+	return err
 }
 
 func (s *SQLiteStorage) Close() error {

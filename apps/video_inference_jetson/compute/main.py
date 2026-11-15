@@ -9,6 +9,11 @@ from ultralytics import YOLO
 
 import proto.fw_pb2 as fw_pb2
 import proto.fw_pb2_grpc as fw_pb2_grpc
+import proto.engine_pb2 as engine_pb2
+import os
+import asyncio
+import socket
+import nats
 from telemetry_client import telemetry
 
 GRPC_PORT = "[::]:9997"
@@ -143,7 +148,37 @@ class ComputeStreamServicer(fw_pb2_grpc.ComputeStreamServicer):
         finally:
             print("gRPC client stream closed.")
 
+async def register_app():
+    app_id = os.getenv("APP_ID")
+    comp_id = os.getenv("COMPONENT_ID")
+    if not app_id or not comp_id:
+        return
+
+    node_id = os.getenv("NODE_ID", socket.gethostname())
+    nats_url = os.getenv("CENTRAL_NATS_URL", "nats://localhost:4222")
+
+    try:
+        nc = await nats.connect(nats_url)
+        req = engine_pb2.AppRegistrationRequest(
+            app_id=app_id,
+            component_id=comp_id,
+            node_id=node_id
+        )
+        msg = await nc.request("c2.engine.app_register", req.SerializeToString(), timeout=2)
+        resp = engine_pb2.AppRegistrationResponse()
+        resp.ParseFromString(msg.data)
+        print(f"App component registered with Central Engine: success={resp.success}")
+        await nc.close()
+    except Exception as e:
+        print(f"Failed to register app component with Central Engine: {e}")
+
 def serve():
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(register_app())
+    except Exception as e:
+        print(f"Failed to run register_app: {e}")
+
     print(f"Loading TensorRT model: {MODEL_PATH}...")
     trt_model = YOLO(MODEL_PATH, task="detect")
 

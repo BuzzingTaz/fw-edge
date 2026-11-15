@@ -12,9 +12,23 @@ message NodeCommand {
     }
     Type type = 1;
     string app_id = 2; // e.g., "yolo-bench-1"
-    
+
     // Optional payload (could be useful later for passing env vars, etc.)
     map<string, string> config = 3;
+
+    // Optional list of specific components to start (e.g., ["logic", "compute"])
+    repeated string components = 4;
+}
+
+// Registration sent from App components to the Engine
+message AppRegistrationRequest {
+    string app_id = 1;
+    string component_id = 2; // e.g., "compute-1"
+    string node_id = 3;
+}
+
+message AppRegistrationResponse {
+    bool success = 1;
 }
 
 // Registration message sent from Edge Actor to Central Engine

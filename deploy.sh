@@ -5,11 +5,11 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$SCRIPT_DIR"
 
 # Default configuration (can be overridden by env vars)
-JETSON_HOST=${JETSON_HOST:-"nvidia1@10.42.0.229"}
+JETSON_HOST=${JETSON_HOST:-"nvidia1@10.42.1.101"}
 REMOTE_DIR="~/fw-edge"
 
 if [ -z "$1" ]; then
-    echo "Usage: ./deploy.sh [host|jetson]"
+    echo "Usage:[JETSON_HOST=user@host] ./deploy.sh jetson"
     exit 1
 fi
 
@@ -19,8 +19,8 @@ echo "Step 1: Generating Protobufs..."
 "$PROJECT_ROOT/scripts/generate_protos.sh"
 
 if [ "$TARGET" = "host" ]; then
-    echo "Step 2: Deploying host services..."
-    docker compose up -d --build
+    echo "Error: Host deployment doesn't work with this script anymore"
+    # docker compose up -d --build
 
 elif [ "$TARGET" = "jetson" ]; then
     echo "Step 2: Syncing required files to Jetson ($JETSON_HOST)..."
@@ -40,6 +40,7 @@ elif [ "$TARGET" = "jetson" ]; then
         --include='Dockerfile.jetson' \
         --include='Dockerfile' \
         --include='scripts/***' \
+        --include='apps/***' \
         --include='compose.jetson.yaml' \
         --include='yolo*.engine' \
         --include='yolo*.pt' \

@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	"github.com/gorilla/websocket"
@@ -47,6 +46,7 @@ type ClientWsMessage struct {
 // TODO: ew, change this to grpc protobuf (that's the whole point of grpc, right?)
 type ProcessedDataMessage struct {
 	TaskId           string `json:"task_id"`
+	Timestamp        uint64 `json:"timestamp"`
 	ProcessingStatus int    `json:"processing_status"`
 	Detections       []struct {
 		X          int     `json:"x"`
@@ -226,9 +226,8 @@ func (client *Client) ListenScheduler() {
 			if errors.Is(err, io.EOF) || ctx.Err() != nil {
 				return
 			}
-			slog.Error("Failed to read from scheduler", "error", err)
-			time.Sleep(1 * time.Second)
-			continue
+			slog.Error("Failed to read from scheduler, disconnecting", "error", err)
+			return
 		}
 
 		message := ProcessedDataMessage{

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -104,7 +105,7 @@ func statusHeartbeat(ctx context.Context, nc *nats.Conn) {
 	for {
 		select {
 		case <-ticker.C:
-			// Just send an empty active_apps list for now. 
+			// Just send an empty active_apps list for now.
 			// Later we can track which apps are actually running by asking docker.
 			status := &pb.NodeStatus{
 				NodeId: *nodeID,
@@ -129,10 +130,8 @@ func handleCommand(msg *nats.Msg) {
 
 	switch cmd.Type {
 	case pb.NodeCommand_START_APP:
-		// Based on the plan, edge actor expects the compose files to exist.
-		// For example, in /apps/<app_id>/docker-compose.yaml
 		go func() {
-			err := runDockerCompose(cmd.AppId, "up", "-d")
+			err := runDockerCompose(cmd.AppId, cmd.Components, "up", "-d")
 			if err != nil {
 				slog.Error("Failed to start app", "app_id", cmd.AppId, "err", err)
 			} else {
@@ -141,7 +140,7 @@ func handleCommand(msg *nats.Msg) {
 		}()
 	case pb.NodeCommand_STOP_APP:
 		go func() {
-			err := runDockerCompose(cmd.AppId, "down")
+			err := runDockerCompose(cmd.AppId, cmd.Components, "down")
 			if err != nil {
 				slog.Error("Failed to stop app", "app_id", cmd.AppId, "err", err)
 			} else {
@@ -151,24 +150,42 @@ func handleCommand(msg *nats.Msg) {
 	}
 }
 
-func runDockerCompose(appID string, args ...string) error {
-	// Simple stub for docker-compose invocation. 
-	// Assumes apps are in /opt/fw-edge/apps/{appID}
-	appDir := fmt.Sprintf("/opt/fw-edge/apps/%s", appID)
-	
-	// Just for local testing safety, don't strictly enforce path existence yet,
-	// but normally we would CD there and run compose.
-	// Since we might not have /opt/... on the dev machine, let's just log it.
-	
-	slog.Info("Mock running docker compose", "dir", appDir, "cmd", strings.Join(args, " "))
-	
-	// Example real implementation:
-	// c := exec.Command("docker", append([]string{"compose"}, args...)...)
-	// c.Dir = appDir
-	// out, err := c.CombinedOutput()
-	// if err != nil {
-	// 	return fmt.Errorf("docker compose failed: %w, output: %s", err, string(out))
-	// }
-	
+func runDockerCompose(appID string, components []string, args ...string) error {
+	// Inside the container, we mounted the full repo to /root/fw-edge
+	appDir := fmt.Sprintf("/root/fw-edge/apps/%s", appID)
+
+	composeArgs := append([]string{"compose"}, args...)
+	if len(components) > 0 {
+		composeArgs = append(composeArgs, components...)
+	}
+
+	slog.Info("Running docker compose", "dir", appDir, "cmd", strings.Join(composeArgs, " "))
+
+	c := exec.Command("docker", composeArgs...)
+	c.Dir = appDir
+	c.Env = os.Environ()
+	if hostDir := getHostProjectDir(); hostDir != "" {
+		c.Env = append(c.Env, "HOST_PROJECT_DIR="+hostDir)
+	}
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("docker compose failed: %w", err)
+	}
+
 	return nil
+}
+
+func getHostProjectDir() string {
+	if dir := os.Getenv("HOST_PROJECT_DIR"); dir != "" {
+		return dir
+	}
+	out, err := exec.Command("docker", "inspect", "fw-edge-actor", "--format", `{{range .Mounts}}{{if eq .Destination "/root/fw-edge"}}{{.Source}}{{end}}{{end}}`).Output()
+	if err == nil {
+		if dir := strings.TrimSpace(string(out)); dir != "" {
+			return dir
+		}
+	}
+	return ""
 }

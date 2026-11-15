@@ -14,8 +14,10 @@ import (
 
 	"github.com/BuzzingTaz/fw-edge-apps/internal/eventsingest"
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 var computeAddr = flag.String("compute-addr", "localhost:9997", "the address to connect to")
@@ -139,11 +141,52 @@ func startClientifGRPCServer() {
 func main() {
 	flag.Parse()
 
-	err := eventsingest.Initialize("nats://localhost:4222", "scheduler3")
+	appID := os.Getenv("APP_ID")
+	compID := os.Getenv("COMPONENT_ID")
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		hostname, _ := os.Hostname()
+		nodeID = hostname
+	}
+
+	centralNats := os.Getenv("CENTRAL_NATS_URL")
+	natsURL := "nats://localhost:4222"
+	if centralNats != "" {
+		natsURL = centralNats
+	}
+	edgeNats := os.Getenv("EDGE_NATS_URL")
+	if edgeNats == "" {
+		edgeNats = "nats://127.0.0.1:4223"
+	}
+
+	err := eventsingest.Initialize(edgeNats, "scheduler3")
 	if err != nil {
 		slog.Warn("Failed to init events ingest client, telemetry will not be tracked", "err", err)
 	}
 	defer eventsingest.Close()
+
+	if appID != "" && compID != "" {
+		nc, err := nats.Connect(natsURL)
+		if err == nil {
+			req := &pb.AppRegistrationRequest{
+				AppId:       appID,
+				ComponentId: compID,
+				NodeId:      nodeID,
+			}
+			data, _ := proto.Marshal(req)
+			msg, err := nc.Request("c2.engine.app_register", data, 2*time.Second)
+			if err != nil {
+				slog.Error("Failed to register app component with Central Engine", "err", err)
+			} else {
+				var resp pb.AppRegistrationResponse
+				proto.Unmarshal(msg.Data, &resp)
+				slog.Info("App component registered with Central Engine", "success", resp.Success)
+			}
+			nc.Close()
+		} else {
+			slog.Error("Failed to connect to Central NATS for registration", "err", err)
+		}
+	}
 
 	go startClientifGRPCServer()
 

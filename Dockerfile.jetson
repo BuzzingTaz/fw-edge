@@ -1,39 +1,20 @@
-FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
+FROM ultralytics/ultralytics:latest-jetson-jetpack6
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
-    UV_BREAK_SYSTEM_PACKAGES=1
+    PYTHONPATH=/app
 
 WORKDIR /app
 
-# Install system dependencies needed for OpenCV, PyAV and compilation (including cudss for Torch)
-ADD https://developer.download.nvidia.com/compute/cudss/0.7.1/local_installers/cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb .
-RUN dpkg -i cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb && \
-    cp /var/cudss-local-tegra-repo-ubuntu2204-0.7.1/cudss-*-keyring.gpg /usr/share/keyrings/ && \
-    apt-get update && \
+# Install system dependencies needed for PyAV compilation
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    git python3-pip libopenmpi-dev libopenblas-base libomp-dev cudss \
-    libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
-    libgl1-mesa-glx libglib2.0-0 && \
+    libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb
+    rm -rf /var/lib/apt/lists/*
 
-# Upgrade TensorRT (Following Ultralytics JetPack 6 fix)
-ADD https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb .
-RUN dpkg -i cuda-keyring_1.1-1_all.deb && \
-    apt-get update && \
-    apt-get install -y tensorrt && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* cuda-keyring_1.1-1_all.deb
-
-# Install uv for fast python package installation, PyTorch, TorchVision and Ultralytics (core)
-# Skipping export dependencies like onnxruntime to keep image slim
-RUN python3 -m pip install --upgrade pip uv && \
-    uv pip install --system \
-    https://github.com/ultralytics/assets/releases/download/v0.0.0/torch-2.10.0-cp310-cp310-linux_aarch64.whl \
-    https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.25.0-cp310-cp310-linux_aarch64.whl \
-    ultralytics \
-    grpcio protobuf paho-mqtt av nats-py && \
-    rm -rf /root/.cache/pip /root/.config/Ultralytics/persistent_cache.json
+# Install the dependencies required for fw-edge (gRPC, MQTT, telemetry, video decoding)
+RUN pip install --upgrade pip && \
+    pip install grpcio protobuf paho-mqtt av nats-py
