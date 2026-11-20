@@ -97,6 +97,7 @@ func (s *EdgeIngestServer) handleSaveTelemetry(w http.ResponseWriter, r *http.Re
 		slog.Error("Failed to process edge telemetry", "err", err, "runId", req.UserID)
 	} else {
 		slog.Info("Processed edge telemetry", "runId", req.UserID, "path", processedPath)
+		writeClientEdgeCSV(dirpath, req.UserID)
 	}
 
 	slog.Info("Saved edge telemetry", "filename", filename, "userID", req.UserID)
@@ -135,7 +136,26 @@ func (s *EdgeIngestServer) handleSaveClientTelemetry(w http.ResponseWriter, r *h
 	}
 
 	slog.Info("Saved client telemetry", "filename", filename, "userID", req.UserID)
+	writeClientEdgeCSV(dirpath, req.UserID)
 	w.WriteHeader(http.StatusOK)
+}
+
+func writeClientEdgeCSV(dirpath, runID string) {
+	clientPath := filepath.Join(dirpath, fmt.Sprintf("client_telemetry_%s.csv", runID))
+	processedPath := filepath.Join(dirpath, fmt.Sprintf("%s_processed.csv", runID))
+	if _, err := os.Stat(clientPath); err != nil {
+		return
+	}
+	if _, err := os.Stat(processedPath); err != nil {
+		return
+	}
+
+	outPath := filepath.Join(dirpath, fmt.Sprintf("%s_client_edge.csv", runID))
+	if err := metrics.ProcessClientEdgeCSV(clientPath, processedPath, outPath); err != nil {
+		slog.Error("Failed to join client and edge telemetry", "err", err, "runId", runID)
+		return
+	}
+	slog.Info("Wrote client-edge telemetry", "runId", runID, "path", outPath)
 }
 
 func (s *EdgeIngestServer) handleListBenchmarks(w http.ResponseWriter, r *http.Request) {

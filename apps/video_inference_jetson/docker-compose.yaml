@@ -2,7 +2,7 @@ services:
   clientif:
     build:
       context: ../../
-      dockerfile: apps/video_inference_jetson/clientif/Dockerfile
+      dockerfile: apps/video_inference_jetson/Dockerfile
       args:
         SERVICE_NAME: clientif
     network_mode: host
@@ -15,10 +15,10 @@ services:
   scheduler:
     build:
       context: ../../
-      dockerfile: apps/video_inference_jetson/scheduler/Dockerfile
+      dockerfile: apps/video_inference_jetson/Dockerfile
       args:
         SERVICE_NAME: scheduler
-    command: ["./scheduler", "--compute-addr=127.0.0.1:9997"]
+    command: ["./service", "--compute-addr=127.0.0.1:9997"]
     network_mode: host
     environment:
       - APP_ID=video_inference_jetson
