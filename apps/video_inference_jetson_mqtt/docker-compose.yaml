@@ -1,0 +1,57 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    network_mode: host
+    volumes:
+      - ${HOST_PROJECT_DIR:-/home/nvidia1/fw-edge}/apps/video_inference_jetson_mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+
+  clientif:
+    build:
+      context: ../../
+      dockerfile: apps/video_inference_jetson/Dockerfile
+      args:
+        SERVICE_NAME: clientif
+    network_mode: host
+    environment:
+      - APP_ID=video_inference_jetson_mqtt
+      - COMPONENT_ID=clientif
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+      - EDGE_NATS_URL=nats://127.0.0.1:4223
+
+  scheduler:
+    build:
+      context: ../../
+      dockerfile: apps/video_inference_jetson_mqtt/Dockerfile
+      args:
+        SERVICE_NAME: scheduler
+    command: ["./service", "--mqtt-broker=tcp://127.0.0.1:1883"]
+    network_mode: host
+    environment:
+      - APP_ID=video_inference_jetson_mqtt
+      - COMPONENT_ID=scheduler
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+      - EDGE_NATS_URL=nats://127.0.0.1:4223
+    depends_on:
+      - mosquitto
+
+  compute:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.jetson
+    image: fw-edge-jetson:latest
+    runtime: nvidia
+    ipc: host
+    network_mode: host
+    volumes:
+      - ${HOST_PROJECT_DIR:-/home/nvidia1/fw-edge}:/app
+    command: ["python3", "apps/video_inference_jetson_mqtt/compute/main.py"]
+    restart: unless-stopped
+    environment:
+      - APP_ID=video_inference_jetson_mqtt
+      - COMPONENT_ID=compute
+      - CENTRAL_NATS_URL=nats://10.42.1.100:4222
+      - EDGE_NATS_URL=nats://127.0.0.1:4223
+      - MQTT_BROKER=127.0.0.1
+    depends_on:
+      - mosquitto

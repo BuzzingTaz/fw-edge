@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,20 @@ var orderedEvents = []string{
 	"compute2_result_yielded",
 	"scheduler3_result_received_compute",
 	"scheduler3_result_sent",
+	"clientif_results_reached",
+	"clientif_results_sent",
+}
+
+var mqttOrderedEvents = []string{
+	"clientif_new_frame_received",
+	"scheduler4_frame_received",
+	"scheduler4_frame_sent_compute",
+	"compute3_frame_received",
+	"compute3_frame_decoded",
+	"compute3_inference_complete",
+	"compute3_result_yielded",
+	"scheduler4_result_received_compute",
+	"scheduler4_result_sent",
 	"clientif_results_reached",
 	"clientif_results_sent",
 }
@@ -115,9 +130,18 @@ func ProcessEdgeCSV(inputPath, outputPath string) error {
 	writer := csv.NewWriter(outFile)
 	defer writer.Flush()
 
+	stages := orderedEvents
+	for _, evs := range eventsByTask {
+		for _, e := range evs {
+			if strings.HasPrefix(e.EventType, "scheduler4_") || strings.HasPrefix(e.EventType, "compute3_") {
+				stages = mqttOrderedEvents
+			}
+		}
+	}
+
 	headers := []string{"time_since_start_ms", "timestamp", "task_id", "e2e_latency_ms"}
-	for i := 0; i < len(orderedEvents)-1; i++ {
-		headers = append(headers, fmt.Sprintf("%s_to_%s_ms", orderedEvents[i], orderedEvents[i+1]))
+	for i := 0; i < len(stages)-1; i++ {
+		headers = append(headers, fmt.Sprintf("%s_to_%s_ms", stages[i], stages[i+1]))
 	}
 	if err := writer.Write(headers); err != nil {
 		return fmt.Errorf("failed to write headers: %w", err)
@@ -157,9 +181,9 @@ func ProcessEdgeCSV(inputPath, outputPath string) error {
 			fmt.Sprintf("%.2f", e2eLatency),
 		}
 
-		for i := 0; i < len(orderedEvents)-1; i++ {
-			ev1, ok1 := eventMap[orderedEvents[i]]
-			ev2, ok2 := eventMap[orderedEvents[i+1]]
+		for i := 0; i < len(stages)-1; i++ {
+			ev1, ok1 := eventMap[stages[i]]
+			ev2, ok2 := eventMap[stages[i+1]]
 			if ok1 && ok2 {
 				latency := ev2.MeasTime.Sub(ev1.MeasTime).Seconds() * 1000.0
 				record = append(record, fmt.Sprintf("%.2f", latency))

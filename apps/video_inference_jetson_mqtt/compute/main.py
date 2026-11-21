@@ -1,18 +1,20 @@
+import os
 import time
 import threading
-import traceback
-from concurrent import futures
+import socket
+import asyncio
 
 import av
 from ultralytics import YOLO
-
 import paho.mqtt.client as mqtt
+import nats
 
 import proto.fw_pb2 as fw_pb2
+import proto.engine_pb2 as engine_pb2
 from telemetry_client import telemetry
 
-MQTT_BROKER = "10.119.207.216"
-MQTT_PORT = 1883
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "127.0.0.1")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MODEL_PATH = "yolo26n.engine"
 CLEANUP_INTERVAL = 10
 TIMEOUT_SECONDS = 60
@@ -38,7 +40,7 @@ class VideoDecoder:
     def configure(self, codec_name: str):
         self.last_active = time.time()
         if codec_name == "unknown":
-            raise ValueError(f"Unsupported codec specified.")
+            raise ValueError("Unsupported codec specified.")
 
         if codec_name == self.codec_name and self.codec is not None:
             return
@@ -68,13 +70,13 @@ class ComputeNode:
         self.decoders = {}
         self.decoders_lock = threading.Lock()
 
-        # paho-mqtt v2 compatible callback setup if needed, but v1 is standard.
-        # We'll use the basic client
-        self.client = mqtt.Client()
+        try:
+            self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+        except AttributeError:
+            self.client = mqtt.Client()
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
 
-        # Start cleanup thread
         self.cleanup_thread = threading.Thread(target=self.cleanup_loop, daemon=True)
         self.cleanup_thread.start()
 
@@ -83,10 +85,11 @@ class ComputeNode:
             time.sleep(CLEANUP_INTERVAL)
             now = time.time()
             with self.decoders_lock:
-                stale_streams = []
-                for stream_id, decoder in self.decoders.items():
-                    if now - decoder.last_active > TIMEOUT_SECONDS:
-                        stale_streams.append(stream_id)
+                stale_streams = [
+                    stream_id
+                    for stream_id, decoder in self.decoders.items()
+                    if now - decoder.last_active > TIMEOUT_SECONDS
+                ]
                 for stream_id in stale_streams:
                     print(f"Cleaning up stale decoder for stream {stream_id}")
                     del self.decoders[stream_id]
@@ -106,7 +109,7 @@ class ComputeNode:
         except Exception as e:
             print(f"Failed to unmarshal EncodedFrame: {e}")
             return
-        
+
         task_id = encoded_frame.task_id
         mime_type = encoded_frame.mime_type
 
@@ -184,17 +187,41 @@ class ComputeNode:
         self.client.connect(MQTT_BROKER, MQTT_PORT, 60)
         self.client.loop_forever()
 
-def serve():
-    print(f"Loading TensorRT model: {MODEL_PATH}...")
+async def register_app():
+    app_id = os.getenv("APP_ID")
+    comp_id = os.getenv("COMPONENT_ID")
+    if not app_id or not comp_id:
+        return
+
+    node_id = os.getenv("NODE_ID", socket.gethostname())
+    nats_url = os.getenv("CENTRAL_NATS_URL", "nats://localhost:4222")
+
     try:
-        trt_model = YOLO(MODEL_PATH, task="detect")
+        nc = await nats.connect(nats_url)
+        req = engine_pb2.AppRegistrationRequest(
+            app_id=app_id,
+            component_id=comp_id,
+            node_id=node_id
+        )
+        msg = await nc.request("c2.engine.app_register", req.SerializeToString(), timeout=2)
+        resp = engine_pb2.AppRegistrationResponse()
+        resp.ParseFromString(msg.data)
+        print(f"App component registered with Central Engine: success={resp.success}")
+        await nc.close()
     except Exception as e:
-        print(f"Failed to load YOLO model {MODEL_PATH}: {e}")
-        print("Falling back to CPU YOLO if available...")
-        trt_model = YOLO("yolov8n.pt", task="detect")
+        print(f"Failed to register app component with Central Engine: {e}")
+
+def serve():
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(register_app())
+    except Exception as e:
+        print(f"Failed to run register_app: {e}")
+
+    print(f"Loading TensorRT model: {MODEL_PATH}...")
+    trt_model = YOLO(MODEL_PATH, task="detect")
 
     node = ComputeNode(trt_model)
-    
     try:
         node.start()
     except KeyboardInterrupt:

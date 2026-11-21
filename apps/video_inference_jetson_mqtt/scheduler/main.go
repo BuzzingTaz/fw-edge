@@ -16,11 +16,12 @@ import (
 	pb "github.com/BuzzingTaz/fw-edge-apps/proto"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
-var mqttBroker = flag.String("mqtt-broker", "tcp://localhost:1883", "MQTT broker address")
+var mqttBroker = flag.String("mqtt-broker", "tcp://127.0.0.1:1883", "MQTT broker address")
 var mqttClient mqtt.Client
 
 type VideoStreamerServiceServer struct {
@@ -34,7 +35,6 @@ func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer
 	resultTopic := fmt.Sprintf("compute/results/%s", streamID)
 	frameTopic := fmt.Sprintf("compute/frames/%s", streamID)
 
-	// Subscribe to results for this stream
 	token := mqttClient.Subscribe(resultTopic, 1, func(client mqtt.Client, msg mqtt.Message) {
 		var inferenceResult pb.InferenceResult
 		if err := proto.Unmarshal(msg.Payload(), &inferenceResult); err != nil {
@@ -57,9 +57,7 @@ func (s *VideoStreamerServiceServer) StreamVideo(stream grpc.BidiStreamingServer
 		slog.Error("Failed to subscribe to MQTT topic", "err", err)
 		return err
 	}
-	defer func() {
-		mqttClient.Unsubscribe(resultTopic)
-	}()
+	defer mqttClient.Unsubscribe(resultTopic)
 
 	for {
 		in, err := stream.Recv()
@@ -113,11 +111,52 @@ func startClientifGRPCServer() {
 func main() {
 	flag.Parse()
 
-	err := eventsingest.Initialize("nats://localhost:4222", "scheduler4")
+	appID := os.Getenv("APP_ID")
+	compID := os.Getenv("COMPONENT_ID")
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		hostname, _ := os.Hostname()
+		nodeID = hostname
+	}
+
+	centralNats := os.Getenv("CENTRAL_NATS_URL")
+	natsURL := "nats://localhost:4222"
+	if centralNats != "" {
+		natsURL = centralNats
+	}
+	edgeNats := os.Getenv("EDGE_NATS_URL")
+	if edgeNats == "" {
+		edgeNats = "nats://127.0.0.1:4223"
+	}
+
+	err := eventsingest.Initialize(edgeNats, "scheduler4")
 	if err != nil {
 		slog.Warn("Failed to init events ingest client, telemetry will not be tracked", "err", err)
 	}
 	defer eventsingest.Close()
+
+	if appID != "" && compID != "" {
+		nc, err := nats.Connect(natsURL)
+		if err == nil {
+			req := &pb.AppRegistrationRequest{
+				AppId:       appID,
+				ComponentId: compID,
+				NodeId:      nodeID,
+			}
+			data, _ := proto.Marshal(req)
+			msg, err := nc.Request("c2.engine.app_register", data, 2*time.Second)
+			if err != nil {
+				slog.Error("Failed to register app component with Central Engine", "err", err)
+			} else {
+				var resp pb.AppRegistrationResponse
+				proto.Unmarshal(msg.Data, &resp)
+				slog.Info("App component registered with Central Engine", "success", resp.Success)
+			}
+			nc.Close()
+		} else {
+			slog.Error("Failed to connect to Central NATS for registration", "err", err)
+		}
+	}
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(*mqttBroker)
@@ -137,5 +176,5 @@ func main() {
 	<-stop
 
 	mqttClient.Disconnect(250)
-	slog.Info("\nShutdown signal received. Exiting.")
+	slog.Info("Shutdown signal received. Exiting.")
 }
